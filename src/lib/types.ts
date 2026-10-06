@@ -4,7 +4,7 @@ export type Message = { id: string; conversationId: string; author: Person; text
 export type Conversation = { id: string; name: string; kind: 'dm' | 'group' | 'space'; members: Person[]; description?: string; lastMessage?: string; updatedAt: string; unread: number; pinned?: boolean; muted?: boolean; section?: string };
 export type ChatState = { user: Person; conversations: Conversation[]; messages: Message[] };
 export type ChatAction =
- | { type: 'send'; conversationId: string; text: string; parentId?: string; attachments?: Attachment[] }
+ | { type: 'send'; conversationId: string; text: string; parentId?: string; attachments?: Attachment[]; clientMessageId?: string }
  | { type: 'edit'; messageId: string; text: string }
  | { type: 'delete'; messageId: string }
  | { type: 'react'; messageId: string; emoji: string }

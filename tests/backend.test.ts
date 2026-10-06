@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import { createDemoState, applyDemoAction } from '../src/lib/demo';
 import { publicConfig, readActionBody, authenticatedUser, ChatError, SCHEMA, validateAttachments } from '../src/lib/server';
 import type { ChatAction, ChatState } from '../src/lib/types';
+import { PendingSendIds, withRequestDeadline } from '../src/lib/use-chat';
 
 const anonKey = `e30.${Buffer.from(JSON.stringify({ role: 'anon' })).toString('base64url')}.test-signature`;
 function configure() {
@@ -140,12 +142,112 @@ test('server accepts safe media signatures and rejects active content, spoofing,
     ['audio/webm', Buffer.from([0x1a,0x45,0xdf,0xa3,0])],
     ['audio/mp4', Buffer.from([0,0,0,16,102,116,121,112,0])],
     ['audio/ogg', Buffer.from('OggS\0')],
+    ['audio/wav', Buffer.from([82,73,70,70,12,0,0,0,87,65,86,69])],
+    ['audio/mpeg', Buffer.from([73,68,51,4,0,0,0,0,0,0])],
+    ['audio/mpeg', Buffer.from([255,251,144,0])],
   ] as const) assert.equal(validateAttachments([file(type, bytes)])[0].type, type);
   assert.throws(() => validateAttachments([{ ...png, type: 'image/svg+xml', url: 'data:image/svg+xml;base64,PHN2Zz4=' }]), /Use an image/);
   assert.throws(() => validateAttachments([{ ...png, url: 'javascript:alert(1)' }]), /file data/);
   assert.throws(() => validateAttachments([file('image/png', Buffer.from('<script>alert(1)</script>'))]), /content does not match/);
   assert.throws(() => validateAttachments([file('audio/webm', Buffer.from('<script>alert(1)</script>'))]), /content does not match/);
+  assert.throws(() => validateAttachments([file('audio/wav', Buffer.from('RIFFxxxxNOTWAVE'))]), /content does not match/);
+  assert.throws(() => validateAttachments([file('audio/mpeg', Buffer.from('<script>alert(1)</script>'))]), /content does not match/);
+  assert.throws(() => validateAttachments([file('audio/mpeg', Buffer.from([255,224,0,0]))]), /content does not match/);
   assert.throws(() => validateAttachments([{ ...png, size: 1 }]), /under 1 MB/);
   assert.throws(() => validateAttachments([png,png,png,png]), /up to 3/);
   assert.throws(() => validateAttachments([file('text/plain', Buffer.alloc(1_048_577))]), /under 1 MB/);
+});
+
+test('auth provider outages preserve sessions while invalid credentials still require sign-in', async () => {
+  configure();
+  const originalFetch = globalThis.fetch;
+  const originalConsoleError = console.error;
+  const request = new Request('https://chat.example.com/api/chat', { headers: { Authorization: `Bearer ${'x'.repeat(40)}` } });
+  try {
+    globalThis.fetch = async () => Response.json({ message: 'Temporary provider outage' }, { status: 503 });
+    await assert.rejects(authenticatedUser(request), (e: unknown) => e instanceof ChatError && e.status === 503);
+    console.error = () => undefined; // SDK logs its synthetic transport error.
+    globalThis.fetch = async () => { throw new TypeError('Synthetic network failure'); };
+    await assert.rejects(authenticatedUser(request), (e: unknown) => e instanceof ChatError && e.status === 503);
+    globalThis.fetch = async () => Response.json({ message: 'Invalid JWT', code: 'bad_jwt' }, { status: 401 });
+    await assert.rejects(authenticatedUser(request), (e: unknown) => e instanceof ChatError && e.status === 401);
+  } finally { globalThis.fetch = originalFetch; console.error = originalConsoleError; }
+});
+
+test('request deadlines and external offline abort release even unresponsive operations', async () => {
+  const deadline = new AbortController();
+  await assert.rejects(withRequestDeadline(deadline, 10, () => new Promise<never>(() => undefined)), /timed out/);
+  assert.equal(deadline.signal.aborted, true);
+  const offline = new AbortController();
+  const pending = withRequestDeadline(offline, 1000, () => new Promise<never>(() => undefined));
+  offline.abort(new Error('Offline fixture'));
+  await assert.rejects(pending, /Offline fixture/);
+  const recovered = new AbortController();
+  assert.equal(await withRequestDeadline(recovered, 1000, async () => 'recovered'), 'recovered');
+  assert.equal(recovered.signal.aborted, false);
+});
+
+test('logical sends reuse UUIDs after ambiguous failure and renew them after acknowledgement or account reset', async () => {
+  const ids = new PendingSendIds();
+  const send: Extract<ChatAction, { type: 'send' }> = { type: 'send', conversationId: '11111111-1111-4111-8111-111111111111', text: ' Hello friend ' };
+  const original = await ids.prepare(send);
+  const retry = await ids.prepare({ ...send, text: 'Hello friend' });
+  assert.equal(retry.action.clientMessageId, original.action.clientMessageId);
+  ids.acknowledge(original.fingerprint, original.action.clientMessageId);
+  const intentionalRepeat = await ids.prepare(send);
+  assert.notEqual(intentionalRepeat.action.clientMessageId, original.action.clientMessageId);
+  ids.clear();
+  const newAccount = await ids.prepare(send);
+  assert.notEqual(newAccount.action.clientMessageId, intentionalRepeat.action.clientMessageId);
+  const differentText = await ids.prepare({ ...send, text: 'Different message' });
+  assert.notEqual(differentText.action.clientMessageId, newAccount.action.clientMessageId);
+  const inFlight = ids.prepare(send);
+  ids.clear();
+  await assert.rejects(inFlight, /account changed/);
+});
+
+test('native M4A picker fixture passes canonical audio/mp4 server validation', () => {
+  const bytes = readFileSync('tests/fixtures/picker-tone.m4a');
+  const files = validateAttachments([{ name: 'picker-tone.m4a', type: 'audio/mp4', size: bytes.length, url: `data:audio/mp4;base64,${bytes.toString('base64')}` }]);
+  assert.equal(files[0].size, bytes.length);
+  assert.equal(files[0].type, 'audio/mp4');
+});
+
+test('send IDs survive reload as hashed metadata and remain isolated by verified account', async () => {
+  const values = new Map<string, string>();
+  const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key,value); }, removeItem: (key: string) => { values.delete(key); } };
+  const action: Extract<ChatAction, { type: 'send' }> = { type: 'send', conversationId: '11111111-1111-4111-8111-111111111111', text: 'Private message content', attachments: [{ name: 'private.txt', type: 'text/plain', size: 6, url: 'data:text/plain;base64,c2VjcmV0' }] };
+  const first = new PendingSendIds(storage);
+  first.bindVerifiedIdentity('verified-account-a');
+  const ambiguous = await first.prepare(action);
+  assert.equal([...values.values()].join('').includes(action.text), false);
+  assert.equal([...values.values()].join('').includes(action.attachments![0].url), false);
+  first.clear(); // Component unmount/startup keeps the metadata.
+  const reloaded = new PendingSendIds(storage);
+  reloaded.bindVerifiedIdentity('verified-account-a');
+  const retried = await reloaded.prepare(action);
+  assert.equal(retried.action.clientMessageId, ambiguous.action.clientMessageId);
+  reloaded.acknowledge(retried.fingerprint, retried.action.clientMessageId);
+  const acknowledgedReload = new PendingSendIds(storage);
+  acknowledgedReload.bindVerifiedIdentity('verified-account-a');
+  const newSend = await acknowledgedReload.prepare(action);
+  assert.notEqual(newSend.action.clientMessageId, ambiguous.action.clientMessageId);
+  acknowledgedReload.bindVerifiedIdentity('verified-account-b');
+  assert.equal(values.has('relay-chat-send-ids-v1:verified-account-a'), false);
+  const otherAccount = await acknowledgedReload.prepare(action);
+  assert.notEqual(otherAccount.action.clientMessageId, newSend.action.clientMessageId);
+  acknowledgedReload.clear(true); // Explicit sign-out removes retry metadata.
+  assert.equal(values.has('relay-chat-send-ids-v1:verified-account-b'), false);
+  assert.equal(values.has('relay-chat-send-ids-last-identity-v1'), false);
+});
+
+test('storage failures retain bounded in-memory send retry protection', async () => {
+  const storage = { getItem: () => { throw new Error('Storage denied'); }, setItem: () => { throw new Error('Storage denied'); }, removeItem: () => { throw new Error('Storage denied'); } };
+  const ids = new PendingSendIds(storage);
+  ids.bindVerifiedIdentity('verified-account-a');
+  const action: Extract<ChatAction, { type: 'send' }> = { type: 'send', conversationId: '11111111-1111-4111-8111-111111111111', text: 'Hello' };
+  const first = await ids.prepare(action);
+  assert.equal((await ids.prepare(action)).action.clientMessageId, first.action.clientMessageId);
+  ids.clear(true);
+  assert.notEqual((await ids.prepare(action)).action.clientMessageId, first.action.clientMessageId);
 });

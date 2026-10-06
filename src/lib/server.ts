@@ -141,9 +141,17 @@ export async function authenticatedUser(request: Request): Promise<User> {
   if (!config.supabaseUrl || !config.supabaseAnonKey) throw new ChatError('Google sign-in is not connected yet.', 503);
   const auth = request.headers.get('authorization') ?? '';
   if (!/^Bearer [^\s]{20,10000}$/.test(auth)) throw new ChatError('Sign in to continue.', 401);
-  const client = createClient(config.supabaseUrl, config.supabaseAnonKey, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+  const client = createClient(config.supabaseUrl, config.supabaseAnonKey, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    global: { fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(6000) }) },
+  });
   const { data, error } = await client.auth.getUser(auth.slice(7));
-  if (error || !data.user) throw new ChatError('Your session expired. Please sign in again.', 401);
+  if (error) {
+    const invalid = error.status === 401 || error.status === 403 || ['bad_jwt','session_not_found','user_not_found','session_expired'].includes(error.code ?? '') || error.name === 'AuthSessionMissingError';
+    if (invalid) throw new ChatError('Your session expired. Please sign in again.', 401);
+    throw new ChatError('Sign-in is temporarily unavailable. Your session is still saved; please try again.', 503);
+  }
+  if (!data.user) throw new ChatError('Sign-in is temporarily unavailable. Please try again.', 503);
   if (!data.user.email || !data.user.email_confirmed_at) throw new ChatError('Verify your email to join conversations.', 403);
   return data.user;
 }
@@ -221,7 +229,7 @@ function text(value: unknown, max: number, label: string, empty = false) {
 }
 function uuid(value: unknown) {
   if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) throw new ChatError('This item is not available.');
-  return value;
+  return value.toLowerCase();
 }
 function bool(value: unknown) { if (typeof value !== 'boolean') throw new ChatError('Invalid preference.'); return value; }
 function emails(value: unknown) {
@@ -239,7 +247,7 @@ export function validateAttachments(value: unknown): Attachment[] {
   return value.map(item => {
     if (!item || typeof item !== 'object') throw new ChatError('Invalid attachment.');
     const name = text(item.name, 120, 'Filename').replace(/[\x00-\x1f\x7f]/g, '');
-    const allowed = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'text/plain', 'application/pdf', 'audio/webm', 'audio/mp4', 'audio/ogg'];
+    const allowed = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'text/plain', 'application/pdf', 'audio/webm', 'audio/mp4', 'audio/ogg', 'audio/mpeg', 'audio/wav'];
     if (!allowed.includes(item.type) || typeof item.url !== 'string' || item.url.length > 1_400_000) throw new ChatError('Use an image, voice note, text file, or PDF under 1 MB.');
     const prefix = `data:${item.type};base64,`;
     if (!item.url.startsWith(prefix)) throw new ChatError('Attachments must contain the selected file data.');
@@ -256,6 +264,8 @@ export function validateAttachments(value: unknown): Attachment[] {
       'audio/webm': () => bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])),
       'audio/mp4': () => bytes.subarray(4, 8).toString('ascii') === 'ftyp',
       'audio/ogg': () => bytes.subarray(0, 4).toString('ascii') === 'OggS',
+      'audio/wav': () => bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WAVE',
+      'audio/mpeg': () => (bytes.length >= 10 && bytes.subarray(0, 3).toString('ascii') === 'ID3' && bytes[3] >= 2 && bytes[3] <= 4 && bytes.subarray(6, 10).every(byte => byte < 128)) || (bytes.length >= 4 && bytes[0] === 255 && (bytes[1] & 0xe0) === 0xe0 && (bytes[1] & 0x18) !== 0x08 && (bytes[1] & 0x06) !== 0 && (bytes[2] >> 4) !== 15 && ((bytes[2] >> 2) & 3) !== 3),
     };
     if (signatures[item.type] && !signatures[item.type]()) throw new ChatError('The file content does not match its type.');
     return { name, type: item.type, url: item.url, size: bytes.length };
@@ -301,11 +311,23 @@ export async function mutateChat(user: User, input: unknown, serverConnection?: 
         const files = validateAttachments(action.attachments);
         const body = text(action.text, 6000, 'Message', files.length > 0);
         const parentId = action.parentId === undefined ? null : uuid(action.parentId);
+        id = action.clientMessageId === undefined ? crypto.randomUUID() : uuid(action.clientMessageId);
+        if (action.clientMessageId !== undefined) {
+          // Serializes concurrent retries even before the message row exists.
+          await tx`select pg_advisory_xact_lock(hashtextextended(${`relay-send:${id}`},0))`;
+          const prior = await tx`select author_id,conversation_id,text,parent_id,attachments,deleted from relay.messages where id=${id} for update`;
+          if (prior.length) {
+            const row = prior[0];
+            const priorFiles = row.attachments as Attachment[];
+            const equalFiles = priorFiles.length === files.length && priorFiles.every((file, i) => file.name === files[i].name && file.type === files[i].type && file.size === files[i].size && file.url === files[i].url);
+            if (row.author_id !== userId || String(row.conversation_id) !== conversationId || row.text !== body || (row.parent_id ?? null) !== parentId || row.deleted || !equalFiles) throw new ChatError('This message identifier was already used for a different message.', 409);
+            return { state: await stateFor(tx, userId), id };
+          }
+        }
         if (parentId) {
           const parent = await accessibleMessage(tx, parentId, userId);
           if (parent.conversation_id !== conversationId || parent.deleted) throw new ChatError('This thread is no longer available.');
         }
-        id = crypto.randomUUID();
         await tx`insert into relay.messages (id,conversation_id,author_id,text,parent_id,attachments) values (${id},${conversationId},${userId},${body},${parentId},${tx.json(files)})`;
         await tx`update relay.conversations set updated_at=now() where id=${conversationId}`;
         await tx`update relay.participants set last_read_at=now(),force_unread=false where conversation_id=${conversationId} and user_id=${userId}`;

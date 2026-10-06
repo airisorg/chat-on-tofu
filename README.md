@@ -2,6 +2,8 @@
 
 An independent team messenger with Google Chat-inspired desktop and iPhone layouts. The app has its own conversations; it does not import Google Chat messages.
 
+Open [Chat on Tofu](https://chat-84bee5accbbd.trytofu.app/) and sign in with Google. To chat with a friend, add their Google email using **New chat** or **Add people**, then share the conversation's invitation link. They sign in with that same email; the invitation is claimed automatically.
+
 ## Run locally
 
 ```sh
@@ -27,6 +29,10 @@ Open the deployed link in Safari, tap **Share**, choose **Add to Home Screen**, 
 
 The interface includes direct/group conversations, spaces, message threads, reactions, image/file uploads, voice messages, message editing/deletion, stars, search, unread filters, conversation preferences, member invitations, drafts and account settings. Google Meet opens in its own service where offered. The app does not replace Google Workspace services such as Calendar or Drive.
 
-Run `npm run typecheck`, `npm run build`, and the Playwright UX suite. Desktop and mobile viewport screenshots are generated during verification. Physical iPhone installation, hardware keyboard behavior and standalone Google account switching require device acceptance; desktop emulation cannot establish those results.
+Run `npm run typecheck` and `npm run build`. With the local app running, use `npm run test:backend`, `npm run test:ux`, `npm run test:platform` and `npm run test:reliability`. Set `APP_URL` if the dev server uses a port other than 3000. The platform suite covers Chromium and WebKit with portrait/landscape phones, tablets, desktop resizing, install guidance, short visual viewports and contrast. The reliability suite uses an isolated fake session and routed API fixtures to test failure recovery without real credentials.
+
+Install test browsers with `npx playwright install chromium webkit` if needed. On macOS the Chromium suites use the installed Google Chrome; set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to select a different Chromium installation. The suites require a local server and cannot accidentally crawl the hosted app.
+
+Desktop and mobile viewport screenshots are generated during verification. Physical iPhone installation, hardware keyboard behavior and standalone Google account switching require device acceptance; desktop emulation cannot establish those results.
 
 Reference design sources: [Google Chat interface](https://support.google.com/chat/answer/7652236?co=GENIE.Platform%3DDesktop&hl=en), [Google Chat iPhone navigation](https://support.google.com/chat/answer/14170781?co=GENIE.Platform%3DiOS&hl=en), [official desktop screenshot](https://workspace.google.com/blog/product-announcements/welcome-new-google-chat), [current Google Chat product page](https://workspace.google.com/products/chat/), [Apple Home Screen instructions](https://support.apple.com/en-lamr/guide/iphone/iphea86e5236/ios).

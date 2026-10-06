@@ -2264,7 +2264,8 @@ button:hover {
     font-size: 9px;
   }
 }
-@media (max-width: 799px) {
+@media (max-width: 799px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
   html,
   body {
     font-size: 14px;
@@ -3196,7 +3197,8 @@ button:hover {
 .brand-demo {
   font-family: "Inter", sans-serif;
 }
-@media (max-width: 799px) {
+@media (max-width: 799px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
   .brand-demo {
     font-size: 8px;
     padding: 3px 5px;
@@ -3303,12 +3305,14 @@ button:hover {
   align-items: center;
   gap: 5px;
 }
-@media (max-width: 799px) {
+@media (max-width: 799px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
   .home-filter-tabs > button:nth-child(4) {
     display: none;
   }
 }
-@media (max-width: 799px) {
+@media (max-width: 799px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
   .app-topbar {
     height: calc(65px + env(safe-area-inset-top));
     min-height: calc(65px + env(safe-area-inset-top));
@@ -3381,4 +3385,179 @@ button:hover {
   flex-shrink: 0;
   font-size: 11px;
   min-height: 44px;
+}
+
+@media (pointer: coarse) {
+  .icon-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .sidebar .nav-item,
+  .sidebar .sidebar-conversation {
+    min-height: 44px;
+  }
+  .sidebar-group-heading {
+    height: 44px;
+  }
+  .sidebar-group-heading > button:first-child {
+    min-height: 44px;
+  }
+  .conversation-tabs > button {
+    min-height: 44px;
+  }
+  .status-button {
+    min-height: 44px;
+  }
+  .sidebar .new-chat-button {
+    min-height: 56px;
+  }
+  .thread-link {
+    min-height: 44px;
+  }
+  .reaction {
+    min-height: 44px;
+  }
+  .kind-tabs > button {
+    min-height: 44px;
+  }
+  .message-actions > .icon-button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .account-button {
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+:root[data-theme="dark"] .brand,
+:root[data-theme="dark"] .nav-item,
+:root[data-theme="dark"] .nav-item.selected,
+:root[data-theme="dark"] .sidebar-conversation.selected,
+:root[data-theme="dark"] .rail-chat,
+:root[data-theme="dark"] .new-chat-button,
+:root[data-theme="dark"] .home-filter-tabs > button.selected,
+:root[data-theme="dark"] .mobile-tabs > button.active,
+:root[data-theme="dark"] .invitation-welcome {
+  color: var(--ink);
+}
+:root[data-theme="dark"] .conversation-header-actions .icon-button,
+:root[data-theme="dark"] .composer-controls > .icon-button,
+:root[data-theme="dark"] .mobile-tabs > button,
+:root[data-theme="dark"] .preview-message p,
+:root[data-theme="dark"] .preview-composer {
+  color: var(--muted);
+}
+:root[data-theme="dark"] .demo-badge {
+  color: var(--muted) !important;
+}
+:root[data-theme="dark"] .demo-notice {
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+:root[data-theme="dark"] .demo-notice > span:first-child,
+:root[data-theme="dark"] .demo-notice > button,
+:root[data-theme="dark"] .install-illustration {
+  color: var(--blue);
+}
+:root[data-theme="dark"] .welcome h1 > span,
+:root[data-theme="dark"] .eyebrow {
+  color: var(--green);
+}
+:root[data-theme="dark"] .primary-button:hover {
+  background: #8ab4f8;
+}
+:root[data-theme="dark"] .danger-button {
+  color: #501311;
+}
+@media (max-width: 799px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
+  :root[data-short-viewport="true"] .conversation-header {
+    height: calc(52px + env(safe-area-inset-top));
+    min-height: calc(52px + env(safe-area-inset-top));
+    padding-top: calc(4px + env(safe-area-inset-top));
+    padding-bottom: 4px;
+  }
+  :root[data-short-viewport="true"] .conversation-tabs,
+  :root[data-short-viewport="true"] .demo-notice {
+    display: none;
+  }
+  :root[data-short-viewport="true"] .composer-wrap {
+    padding-top: 6px;
+    padding-bottom: max(6px, env(safe-area-inset-bottom));
+  }
+  :root[data-short-viewport="true"] .thread-panel > header {
+    height: calc(52px + env(safe-area-inset-top));
+    min-height: calc(52px + env(safe-area-inset-top));
+    padding-top: calc(4px + env(safe-area-inset-top));
+    padding-bottom: 4px;
+  }
+}
+:root[data-theme="dark"] .search-box {
+  color: var(--muted);
+}
+:root[data-theme="dark"] .search-shortcut {
+  color: var(--muted);
+  background: var(--hover);
+}
+@media (max-width: 799px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
+  .app-shell,
+  .app-shell.thread-open {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  .thread-panel {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  .dialog-backdrop {
+    padding-left: calc(18px + env(safe-area-inset-left));
+    padding-right: calc(18px + env(safe-area-inset-right));
+  }
+  .mobile-new-chat {
+    right: calc(21px + env(safe-area-inset-right));
+  }
+  .welcome-header {
+    padding-left: calc(23px + env(safe-area-inset-left));
+    padding-right: calc(23px + env(safe-area-inset-right));
+  }
+}
+@media (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
+  .app-topbar {
+    height: calc(52px + env(safe-area-inset-top));
+    min-height: calc(52px + env(safe-area-inset-top));
+  }
+  .home-header {
+    padding-top: 12px;
+    padding-bottom: 8px;
+  }
+  .home-header h1 {
+    font-size: 22px;
+    margin-bottom: 0;
+  }
+  .home-header p {
+    display: none;
+  }
+  .mobile-search {
+    min-height: 44px;
+    margin-bottom: 8px;
+  }
+  .mobile-search input {
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  .home-filter-tabs {
+    margin-bottom: 4px;
+  }
+  .conversation-row {
+    min-height: 64px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  .row-options {
+    top: 10px;
+  }
 }

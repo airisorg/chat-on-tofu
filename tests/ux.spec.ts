@@ -200,8 +200,8 @@ test('create a space and a DM, edit profile, and open installation help', async 
   await sidebar(page).getByRole('button', { name: /^Acceptance space/ }).click();
   await expect(main(page).getByRole('heading', { name: 'Acceptance space', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Help and installation', exact: true }).click();
-  await expect(dialog(page, 'Make yourself at home').getByText('Safari', { exact: true })).toBeVisible();
-  await expect(dialog(page, 'Make yourself at home').getByText('Add to Home Screen', { exact: true })).toBeVisible();
+  await expect(dialog(page, 'Make yourself at home').getByText('Chrome', { exact: true })).toBeVisible();
+  await expect(dialog(page, 'Make yourself at home').getByText('Install app', { exact: true })).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 

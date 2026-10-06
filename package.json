@@ -6,7 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:backend": "tsx --test tests/backend.test.ts tests/database.test.ts",
+    "test:ux": "playwright test",
+    "test:platform": "playwright test --config playwright.platform.config.ts",
+    "test:reliability": "playwright test --config playwright.reliability.config.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.0",

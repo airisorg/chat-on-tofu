@@ -51,6 +51,8 @@ import {
 } from "lucide-react";
 import { useChat } from "@/lib/use-chat";
 import VoiceRecorder from "./VoiceRecorder";
+import InstallHelp from "./InstallHelp";
+import { isCompactViewport } from "./platform";
 import type {
   Attachment,
   ChatAction,
@@ -320,7 +322,7 @@ export default function ChatApp() {
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [theme, setTheme] = useState("system");
-  const [notification, setNotification] = useState("");
+  const [themeReady, setThemeReady] = useState(false);
   const [requestedInvitation, setRequestedInvitation] = useState("");
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<
@@ -355,7 +357,13 @@ export default function ChatApp() {
     ),
   ];
   useEffect(() => {
-    setTheme(localStorage.getItem("relay-theme") || "system");
+    try {
+      const saved = localStorage.getItem("relay-theme");
+      if (saved && ["system", "light", "dark"].includes(saved)) setTheme(saved);
+    } catch {
+      /* Storage can be blocked by browser privacy settings. */
+    }
+    setThemeReady(true);
     try {
       const invitation = new URLSearchParams(window.location.search).get(
         "join",
@@ -383,9 +391,15 @@ export default function ChatApp() {
         theme === "system" ? (dark.matches ? "dark" : "light") : theme);
     apply();
     dark.addEventListener("change", apply);
-    localStorage.setItem("relay-theme", theme);
+    if (themeReady) {
+      try {
+        localStorage.setItem("relay-theme", theme);
+      } catch {
+        /* Appearance still works for this visit. */
+      }
+    }
     return () => dark.removeEventListener("change", apply);
-  }, [theme]);
+  }, [theme, themeReady]);
   useEffect(() => {
     const userId = state?.user.id || null;
     if (previousUser.current === userId) return;
@@ -424,7 +438,7 @@ export default function ChatApp() {
       const invitedConversation = state.conversations.find(
         (c) => c.id === invitation,
       );
-      if (invitedConversation || window.innerWidth >= 800) {
+      if (invitedConversation || !isCompactViewport()) {
         const initial =
           invitedConversation ||
           (chat.demo
@@ -487,7 +501,7 @@ export default function ChatApp() {
     const input = composerRef.current;
     if (input) {
       input.style.height = "auto";
-      input.style.height = `${Math.min(input.scrollHeight, window.innerWidth < 800 ? 110 : 140)}px`;
+      input.style.height = `${Math.min(input.scrollHeight, isCompactViewport() ? 110 : 140)}px`;
     }
   }, [draft, selectedId]);
   useEffect(() => {
@@ -641,6 +655,15 @@ export default function ChatApp() {
     if (!files) return;
     const incoming: Attachment[] = [];
     for (const f of Array.from(files)) {
+      const rawType = f.type.toLowerCase().split(";")[0];
+      const type =
+        rawType === "audio/x-m4a" ||
+        rawType === "audio/m4a" ||
+        (!rawType && /\.m4a$/i.test(f.name))
+          ? "audio/mp4"
+          : rawType === "audio/x-wav"
+            ? "audio/wav"
+            : rawType;
       if (f.size > 1024 * 1024) {
         setToast(`${f.name} is too large. Choose a file under 1 MB.`);
         continue;
@@ -651,7 +674,7 @@ export default function ChatApp() {
       }
       if (
         !/^(image\/(png|jpeg|gif|webp)|text\/plain|application\/pdf|audio\/(webm|mp4|ogg|mpeg|wav))$/.test(
-          f.type,
+          type,
         )
       ) {
         setToast(
@@ -667,9 +690,9 @@ export default function ChatApp() {
       });
       incoming.push({
         name: f.name,
-        type: f.type || "application/octet-stream",
+        type,
         size: f.size,
-        url,
+        url: url.replace(/^data:[^;]+;/, `data:${type};`),
       });
     }
     setAttachments((current) => [...current, ...incoming]);
@@ -773,20 +796,6 @@ export default function ChatApp() {
     } finally {
       setBusy(false);
     }
-  }
-  async function requestNotifications() {
-    if (!("Notification" in window)) {
-      setNotification(
-        "This browser does not support notifications. On iPhone, add Relay Chat to your Home Screen first.",
-      );
-      return;
-    }
-    const result = await Notification.requestPermission();
-    setNotification(
-      result === "granted"
-        ? "Browser permission enabled. Background push notifications are not available yet."
-        : "Notifications were not enabled. You can change this in your browser settings.",
-    );
   }
   function showMessage(message: Message) {
     setModal({ type: "message", message });
@@ -1287,7 +1296,7 @@ export default function ChatApp() {
       {!inThread && (
         <input
           type="file"
-          accept="image/png,image/jpeg,image/gif,image/webp,text/plain,application/pdf,audio/webm,audio/mp4,audio/ogg,audio/mpeg,audio/wav"
+          accept="image/png,image/jpeg,image/gif,image/webp,text/plain,application/pdf,audio/webm,audio/mp4,audio/ogg,audio/mpeg,audio/wav,audio/x-m4a,audio/x-wav,.m4a"
           hidden
           multiple
           ref={fileRef}
@@ -1305,6 +1314,15 @@ export default function ChatApp() {
   return (
     <div
       className={`app-shell ${selected ? "conversation-open" : ""} ${thread ? "thread-open" : ""}`}
+      onClickCapture={(event) => {
+        // Safari does not focus clicked buttons by default. Establish the
+        // trigger before opening a dialog so Escape restores a useful target.
+        const button =
+          event.target instanceof Element
+            ? event.target.closest("button")
+            : null;
+        button?.focus({ preventScroll: true });
+      }}
     >
       <a href="#main-content" className="skip-link">
         Skip to conversation
@@ -2259,22 +2277,6 @@ export default function ChatApp() {
               </div>
               <div className="setting-row">
                 <span>
-                  <Bell size={21} />
-                  <span>
-                    <strong>Notifications</strong>
-                    <small>Choose your browser permission.</small>
-                  </span>
-                </span>
-                <button
-                  className="text-button"
-                  onClick={() => void requestNotifications()}
-                >
-                  Enable
-                </button>
-              </div>
-              {notification && <p className="dialog-note">{notification}</p>}
-              <div className="setting-row">
-                <span>
                   <Smartphone size={21} />
                   <span>
                     <strong>Home Screen app</strong>
@@ -2309,59 +2311,21 @@ export default function ChatApp() {
             </div>
           )}
           {modal.type === "install" && (
-            <div className="install-content">
-              <span className="install-illustration">
-                <Smartphone size={43} />
-                <MessageCircle size={25} />
-              </span>
-              <h3>Your conversations. One tap away.</h3>
-              <p>
-                Add Chat to your iPhone Home Screen for an app experience
-                without the browser bars.
-              </p>
-              <ol>
-                <li>
-                  <span>1</span>
-                  <div>
-                    Open this website in <strong>Safari</strong>.
-                  </div>
-                </li>
-                <li>
-                  <span>2</span>
-                  <div>
-                    Tap <strong>Share</strong> <ArrowUpRight size={16} /> in the
-                    Safari toolbar.
-                  </div>
-                </li>
-                <li>
-                  <span>3</span>
-                  <div>
-                    Choose <strong>Add to Home Screen</strong>, then tap{" "}
-                    <strong>Add</strong>.
-                  </div>
-                </li>
-              </ol>
-              {installPrompt && (
-                <button
-                  className="primary-button full-width"
-                  onClick={async () => {
-                    await installPrompt.prompt();
-                    setInstallPrompt(null);
-                  }}
-                >
-                  Install Chat
-                  <ArrowDownToLine size={18} />
-                </button>
-              )}
-              <div className="install-note">
-                <Info size={18} />
-                <span>
-                  Launch from your Home Screen after installing. Demo changes
-                  stay on this device. Sign in to sync real conversations with
-                  your friends.
-                </span>
-              </div>
-            </div>
+            <InstallHelp
+              canInstall={Boolean(installPrompt)}
+              onInstall={async () => {
+                if (!installPrompt) return;
+                try {
+                  await installPrompt.prompt();
+                } catch {
+                  setToast(
+                    "Installation did not complete. You can use your browser menu to try again.",
+                  );
+                } finally {
+                  setInstallPrompt(null);
+                }
+              }}
+            />
           )}
           {modal.type === "more" && (
             <div className="menu-list">
@@ -2466,7 +2430,7 @@ export default function ChatApp() {
                         muted: !modal.conversation.muted,
                       },
                       modal.conversation.muted
-                        ? "Notifications unmuted"
+                        ? "Conversation unmuted"
                         : "Conversation muted",
                     );
                     setModal(null);

@@ -11,6 +11,89 @@ const AUTH_STORAGE_KEY = 'relay-chat-auth-v1';
 const DEMO_CHOICE_KEY = 'relay-chat-demo-choice-v1';
 const DEMO_ALLOWED = process.env.NODE_ENV !== 'production' || process.env.NEXT_PUBLIC_ENABLE_DEMO === 'true';
 
+export async function withRequestDeadline<T>(controller: AbortController, timeoutMs: number, work: () => Promise<T>): Promise<T> {
+  let rejectAbort: (reason: unknown) => void = () => undefined;
+  const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject; });
+  const onAbort = () => rejectAbort(controller.signal.reason ?? new DOMException('Request cancelled.', 'AbortError'));
+  controller.signal.addEventListener('abort', onAbort, { once: true });
+  if (controller.signal.aborted) onAbort();
+  const timer = setTimeout(() => controller.abort(new Error('Connection timed out. Please try again.')), timeoutMs);
+  try {
+    return await Promise.race([Promise.resolve().then(() => { controller.signal.throwIfAborted(); return work(); }), aborted]);
+  } finally {
+    clearTimeout(timer);
+    controller.signal.removeEventListener('abort', onAbort);
+  }
+}
+
+export class PendingSendIds {
+  private readonly ids = new Map<string, string>();
+  private revision = 0;
+  private identity = '';
+  private readonly prefix = 'relay-chat-send-ids-v1:';
+  private readonly identityKey = 'relay-chat-send-ids-last-identity-v1';
+  private readonly storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+
+  constructor(storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>) {
+    try { this.storage = storage ?? (typeof window === 'undefined' ? undefined : window.localStorage); } catch { /* In-memory retry protection remains available. */ }
+  }
+
+  bindVerifiedIdentity(identity: string) {
+    if (this.identity === identity) return;
+    this.revision++;
+    this.ids.clear();
+    this.identity = identity;
+    try {
+      const previous = this.storage?.getItem(this.identityKey);
+      if (previous && previous !== identity) this.storage?.removeItem(this.prefix + previous);
+      this.storage?.setItem(this.identityKey, identity);
+      const raw = this.storage?.getItem(this.prefix + identity);
+      if (!raw || raw.length > 12000) return;
+      const saved = JSON.parse(raw) as { version?: number; entries?: unknown };
+      if (saved.version !== 1 || !Array.isArray(saved.entries)) return;
+      for (const pair of saved.entries.slice(-64)) {
+        if (Array.isArray(pair) && pair.length === 2 && typeof pair[0] === 'string' && /^[0-9a-f]{64}$/.test(pair[0]) && typeof pair[1] === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(pair[1])) this.ids.set(pair[0], pair[1]);
+      }
+    } catch { /* Damaged or unavailable browser storage uses memory only. */ }
+  }
+
+  private persist() {
+    if (!this.identity) return;
+    try {
+      if (this.ids.size) this.storage?.setItem(this.prefix + this.identity, JSON.stringify({ version: 1, entries: [...this.ids] }));
+      else this.storage?.removeItem(this.prefix + this.identity);
+    } catch { /* Storage capacity/privacy restrictions preserve memory retries. */ }
+  }
+
+  async prepare(action: Extract<ChatAction, { type: 'send' }>) {
+    const revision = this.revision;
+    const logical = JSON.stringify([action.conversationId.toLowerCase(), action.text.trim(), action.parentId?.toLowerCase() ?? null, (action.attachments ?? []).map(file => [file.name,file.type,file.size,file.url])]);
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(logical));
+    if (revision !== this.revision) throw new Error('Your account changed. Please try again.');
+    const fingerprint = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,'0')).join('');
+    const id = action.clientMessageId ?? this.ids.get(fingerprint) ?? crypto.randomUUID();
+    this.ids.set(fingerprint, id);
+    // Retain hashes/UUIDs only, never message text or media; bound memory use.
+    if (this.ids.size > 64) this.ids.delete(this.ids.keys().next().value!);
+    this.persist();
+    return { fingerprint, action: { ...action, clientMessageId: id } };
+  }
+
+  acknowledge(fingerprint: string, id: string) { if (this.ids.get(fingerprint) === id) { this.ids.delete(fingerprint); this.persist(); } }
+  clear(purge = false) {
+    this.revision++;
+    if (purge) {
+      try {
+        const identity = this.identity || this.storage?.getItem(this.identityKey);
+        if (identity) this.storage?.removeItem(this.prefix + identity);
+        this.storage?.removeItem(this.identityKey);
+      } catch { /* Memory state still clears if storage is unavailable. */ }
+    }
+    this.ids.clear();
+    this.identity = '';
+  }
+}
+
 export function useChat(): ChatController {
   const [state, setState] = useState<ChatState | null>(null);
   const [loading, setLoading] = useState(true);
@@ -36,6 +119,7 @@ export function useChat(): ChatController {
   const dismissed = useRef(false);
   const mounted = useRef(false);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const pendingSends = useRef(new PendingSendIds());
 
   const publish = useCallback((next: ChatState | null) => {
     stateRef.current = next;
@@ -55,6 +139,8 @@ export function useChat(): ChatController {
     revision.current++;
     for (const controller of controllers.current) controller.abort();
     controllers.current.clear();
+    pendingSends.current.clear();
+    writing.current = false;
     stopRealtime();
     modeRef.current = mode;
     identityRef.current = identity;
@@ -72,6 +158,7 @@ export function useChat(): ChatController {
     const controller = new AbortController();
     controllers.current.add(controller);
     try {
+      return await withRequestDeadline(controller, method === 'GET' ? 8000 : 20000, async () => {
       const response = await fetch('/api/chat', {
         method, cache: 'no-store', signal: controller.signal,
         headers: { Authorization: `Bearer ${tokenRef.current}`, ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}) },
@@ -85,6 +172,7 @@ export function useChat(): ChatController {
       }
       if (!payload.state?.user || payload.state.user.id !== identityRef.current) throw new Error('Your account changed. Please sign in again.');
       return payload as { state: ChatState; id?: string };
+      });
     } finally { controllers.current.delete(controller); }
   }, []);
 
@@ -97,6 +185,7 @@ export function useChat(): ChatController {
     try {
       const result = await request('GET');
       if (start !== generation.current || version !== revision.current || modeRef.current !== 'auth') return;
+      pendingSends.current.bindVerifiedIdentity(result.state.user.id);
       publish(result.state);
       configureRealtime.current?.(result.state.user.id);
       if (mounted.current) setError(null);
@@ -137,7 +226,9 @@ export function useChat(): ChatController {
     mounted.current = true;
     let disposed = false;
     let unsubscribe: (() => void) | undefined;
-    const bootstrap = new AbortController();
+    let bootstrap: AbortController | null = null;
+    let initializing = false;
+    let initialized = false;
     const accept = (session: Session | null) => {
       if (disposed || modeRef.current === 'demo' || (dismissed.current && session)) return;
       if (!session) { reset('guest'); return; }
@@ -153,21 +244,30 @@ export function useChat(): ChatController {
       return false;
     };
     const initialize = async () => {
+      if (disposed || initializing || initialized) return;
+      initializing = true;
+      const controller = new AbortController();
+      bootstrap = controller;
+      controllers.current.add(controller);
       try {
-        const response = await fetch('/api/config', { cache: 'no-store', signal: bootstrap.signal });
-        if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('Unable to load sign-in settings.');
-        const config = await response.json() as Config;
+        const config = await withRequestDeadline(controller, 8000, async () => {
+          const response = await fetch('/api/config', { cache: 'no-store', signal: controller.signal });
+          if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('Unable to load sign-in settings.');
+          return await response.json() as Config;
+        });
+        controllers.current.delete(controller);
         if (!config || typeof config.supabaseUrl !== 'string' || typeof config.supabaseAnonKey !== 'string' || typeof config.databaseConfigured !== 'boolean') throw new Error('Unable to load sign-in settings.');
         let valid = false;
         try { const url = new URL(config.supabaseUrl); valid = url.protocol === 'https:' && !url.username && !url.password && Boolean(config.supabaseAnonKey) && config.databaseConfigured === true; } catch { /* Unconfigured local preview remains a guest. */ }
         if (disposed) return;
         configRef.current = config;
         setAuthAvailable(valid);
-        if (!valid) { if (!restoreDemo()) setLoading(false); return; }
+        if (!valid) { initialized = true; if (!restoreDemo()) setLoading(false); return; }
         const client = createClient(config.supabaseUrl, config.supabaseAnonKey, {
           auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit', storageKey: AUTH_STORAGE_KEY },
         });
         clientRef.current = client;
+        initialized = true;
         configureRealtime.current = (userId: string) => {
           // The API has already verified this identity before this subscription.
           if (disposed || realtimeIdentity.current === userId || modeRef.current !== 'auth') return;
@@ -188,7 +288,7 @@ export function useChat(): ChatController {
         const { data: listener } = client.auth.onAuthStateChange((_event, session) => accept(session));
         unsubscribe = () => listener.subscription.unsubscribe();
         const hash = new URLSearchParams(window.location.hash.slice(1));
-        const { data, error: authError } = await client.auth.getSession();
+        const { data, error: authError } = await withRequestDeadline(controller, 8000, () => client.auth.getSession());
         if (disposed) return;
         // Callback tokens must never remain in the visible URL or browser history.
         if (hash.has('access_token') || hash.has('refresh_token') || hash.has('error')) window.history.replaceState(null, '', window.location.pathname + window.location.search);
@@ -200,9 +300,13 @@ export function useChat(): ChatController {
           setError('Unable to connect. Check your connection and refresh the page.');
           setLoading(false);
         }
-      }
+      } finally { controllers.current.delete(controller); initializing = false; }
     };
-    const connectivity = () => { setOffline(!navigator.onLine); if (navigator.onLine) void sync(); };
+    const connectivity = () => {
+      setOffline(!navigator.onLine);
+      if (!navigator.onLine) controllers.current.forEach(controller => controller.abort(new Error('You’re offline. Reconnect to continue.')));
+      else { if (!initialized) void initialize(); void sync(); }
+    };
     const visibility = () => { if (!document.hidden) void sync(); };
     connectivity();
     window.addEventListener('online', connectivity);
@@ -215,9 +319,10 @@ export function useChat(): ChatController {
       mounted.current = false;
       generation.current++;
       syncing.current = false;
-      bootstrap.abort();
+      bootstrap?.abort();
       controllers.current.forEach(c => c.abort());
       controllers.current.clear();
+      pendingSends.current.clear();
       stopRealtime();
       configureRealtime.current = null;
       unsubscribe?.();
@@ -244,13 +349,19 @@ export function useChat(): ChatController {
         return result.id;
       }
       if (modeRef.current !== 'auth' || !tokenRef.current) throw new Error('Sign in to continue.');
+      if (stateRef.current?.user.id !== identityRef.current) throw new Error('Wait for your account to finish connecting.');
+      pendingSends.current.bindVerifiedIdentity(stateRef.current.user.id);
+      const prepared = value.type === 'send' ? await pendingSends.current.prepare(value) : null;
+      if (start !== generation.current) throw new Error('Your account changed. Please try again.');
+      if (!navigator.onLine) throw new Error('You’re offline. Reconnect before making changes.');
       revision.current++;
       writing.current = true;
       try {
-        const result = await request('POST', value);
+        const result = await request('POST', prepared?.action ?? value);
         if (start !== generation.current || modeRef.current !== 'auth') throw new Error('Your account changed. Please try again.');
         revision.current++;
         publish(result.state);
+        if (prepared && result.id === prepared.action.clientMessageId) pendingSends.current.acknowledge(prepared.fingerprint, result.id);
         setError(null);
         return result.id;
       } finally {
@@ -282,6 +393,7 @@ export function useChat(): ChatController {
 
   const signOut = useCallback(async () => {
     dismissed.current = true;
+    pendingSends.current.clear(true);
     reset('guest');
     try { localStorage.removeItem(AUTH_STORAGE_KEY); localStorage.removeItem(DEMO_CHOICE_KEY); } catch { /* Private browsing may disable storage. */ }
     const client = clientRef.current;

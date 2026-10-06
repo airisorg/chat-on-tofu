@@ -108,3 +108,42 @@ test('real PostgreSQL schema and two-account chat preserve membership and per-us
     await pg.exec('RESET ROLE;');
   } finally { await pg.close(); }
 });
+
+test('stable client message IDs deduplicate lost acknowledgements and reject foreign or changed payloads', async () => {
+  const pg = new PGlite();
+  const sql = sqlAdapter(pg, callback => pg.transaction(tx => callback(tx)));
+  const alice = user('11111111-1111-4111-8111-111111111111', 'alice@example.com', 'Alice');
+  const bob = user('22222222-2222-4222-8222-222222222222', 'bob@example.com', 'Bob');
+  try {
+    await applySchema(sql);
+    await getChat(alice, sql);
+    const conversation = await mutateChat(alice, { type: 'create', name: 'Bob', kind: 'dm', emails: [bob.email] }, sql);
+    await getChat(bob, sql);
+    const audio = Buffer.from([0x1a,0x45,0xdf,0xa3,0]);
+    const action = { type: 'send', conversationId: conversation.id!, text: 'Hello friend', clientMessageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', attachments: [{ name: 'voice.webm', type: 'audio/webm', size: audio.length, url: `data:audio/webm;base64,${audio.toString('base64')}` }] };
+    const committed = await mutateChat(alice, action, sql); // Simulate losing this acknowledgement.
+    const eventCount = (await pg.query('select * from relay.events')).rows.length;
+    const retry = await mutateChat(alice, action, sql);
+    assert.equal(retry.id, committed.id);
+    assert.equal(retry.state.messages.length, 1);
+    assert.equal((await getChat(bob, sql)).messages.length, 1);
+    assert.equal((await pg.query('select * from relay.events')).rows.length, eventCount, 'deduplicated retries emit no duplicate realtime events');
+    const upper = await mutateChat(alice, { ...action, clientMessageId: action.clientMessageId.toUpperCase(), conversationId: action.conversationId.toUpperCase() }, sql);
+    assert.equal(upper.id, committed.id);
+    await assert.rejects(mutateChat(bob, action, sql), (e: unknown) => e instanceof ChatError && e.status === 409);
+    await assert.rejects(mutateChat(alice, { ...action, text: 'Changed payload' }, sql), (e: unknown) => e instanceof ChatError && e.status === 409);
+    await assert.rejects(mutateChat(alice, { ...action, attachments: [] }, sql), (e: unknown) => e instanceof ChatError && e.status === 409);
+    await assert.rejects(mutateChat(alice, { ...action, clientMessageId: 'invalid' }, sql), (e: unknown) => e instanceof ChatError && e.status === 400);
+    const other = await mutateChat(alice, { type: 'create', name: 'Private space', kind: 'space', emails: [] }, sql);
+    await assert.rejects(mutateChat(alice, { ...action, conversationId: other.id }, sql), (e: unknown) => e instanceof ChatError && e.status === 409);
+    const concurrent = { ...action, clientMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' };
+    const [first, second] = await Promise.all([mutateChat(alice, concurrent, sql), mutateChat(alice, concurrent, sql)]);
+    assert.equal(first.id, second.id);
+    assert.equal((await getChat(alice, sql)).messages.length, 2);
+    const legacy = { type: 'send', conversationId: action.conversationId, text: 'Legacy client' };
+    const legacyOne = await mutateChat(alice, legacy, sql);
+    const legacyTwo = await mutateChat(alice, legacy, sql);
+    assert.notEqual(legacyOne.id, legacyTwo.id);
+    assert.equal((await getChat(alice, sql)).messages.length, 4);
+  } finally { await pg.close(); }
+});
