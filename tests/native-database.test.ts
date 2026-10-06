@@ -1,0 +1,218 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import type postgres from 'postgres';
+import { applySchema, ChatError, enforceRequestLimit, getAttachment, getChat, mutateChat, stageUpload, type UploadChunk } from '../src/lib/server';
+import { advisoryBarrier, fixtureUser, nativeCluster, nativeEnabled, nativeSkip, recordNativeEvidence, until } from './helpers/native-postgres';
+
+function chunk(conversationId: string, clientMessageId = crypto.randomUUID(), data = Buffer.from('native file')): UploadChunk {
+  return { conversationId, clientMessageId, attachmentIndex: 0, name: 'native.txt', type: 'text/plain', size: data.length, chunkIndex: 0, totalChunks: 1, data: data.toString('base64') };
+}
+const failure = (status: number) => (error: unknown) => error instanceof ChatError && error.status === status;
+
+test('opt-in native PostgreSQL concurrency, TLS, memberships and immutable staging', { skip: nativeEnabled ? false : nativeSkip, timeout: 90000 }, async t => {
+  const fixture = await nativeCluster('database');
+  const started = Date.now();
+  const completed: string[] = [];
+  try {
+    const admin = fixture.client(), one = fixture.client(), two = fixture.client(), blocker = fixture.client(), observer = fixture.client();
+    const pids = await Promise.all([admin, one, two, blocker, observer].map(async sql => Number((await sql`select pg_backend_pid() as pid`)[0].pid)));
+    assert.equal(new Set(pids).size, 5, 'five actual native sessions, not a single-session SQL adapter');
+    assert.equal((await admin`select ssl from pg_stat_ssl where pid=pg_backend_pid()`)[0].ssl, true);
+    await applySchema(admin);
+    const version = String((await admin`select version()`)[0].version).split(',')[0];
+    await t.test('TLS require encrypts but does not authenticate an untrusted certificate; explicit CA verification does', async () => {
+      const required = fixture.client('require');
+      assert.equal((await required`select ssl from pg_stat_ssl where pid=pg_backend_pid()`)[0].ssl, true);
+      const untrusted = fixture.client({ rejectUnauthorized: true });
+      await assert.rejects(untrusted`select 1`, error => error instanceof Error && /self.signed|certificate/i.test(error.message));
+      assert.equal(Number((await admin`select 1 as trusted`)[0].trusted), 1, 'explicit fixture CA plus host SAN verifies successfully');
+      const wrongHost = fixture.client({ ca: fixture.certificate, rejectUnauthorized: true, servername: 'wrong.native-test.invalid' });
+      await assert.rejects(wrongHost`select 1`, error => error instanceof Error && /hostname|altnames|does not match/i.test(error.message), 'a trusted CA does not authorize a different server name');
+      completed.push('TLS certificate challenge');
+    });
+    async function pair(label: string) {
+      const owner = fixtureUser(`${label}-owner`), peer = fixtureUser(`${label}-peer`);
+      await getChat(owner, admin); await getChat(peer, admin);
+      const conversationId = (await mutateChat(owner, { type: 'create', kind: 'group', name: label, emails: [peer.email!] }, admin)).id!;
+      await admin`delete from relay.events where conversation_id=${conversationId}`;
+      return { owner, peer, conversationId };
+    }
+    const eventCount = async (sql: postgres.Sql, conversationId: string) => Number((await sql`select count(*)::int as count from relay.events where conversation_id=${conversationId}`)[0].count);
+    await t.test('two native sessions racing a send and an action UUID commit one message, one receipt and one event fanout', async () => {
+      const { owner, peer, conversationId } = await pair('identical-races');
+      const clientMessageId = crypto.randomUUID(), payload = { type: 'send', conversationId, text: 'Concurrent native send', clientMessageId };
+      const lock = await advisoryBarrier(blocker, observer, `relay-send:${clientMessageId}`);
+      const sends = [mutateChat(owner, payload, one), mutateChat(owner, payload, two)];
+      try { await lock.waitForBlocked([pids[1], pids[2]]); } finally { await lock.release(); }
+      const results = await Promise.all(sends);
+      assert.deepEqual(results.map(result => result.id), [clientMessageId, clientMessageId]);
+      assert.equal(Number((await admin`select count(*)::int as count from relay.messages where id=${clientMessageId}`)[0].count), 1);
+      assert.equal(await eventCount(admin, conversationId), 2);
+      await assert.rejects(mutateChat(peer, payload, two), failure(409));
+      await assert.rejects(mutateChat(owner, { ...payload, text: 'Changed intent' }, one), failure(409));
+      await admin`delete from relay.events where conversation_id=${conversationId}`;
+      const clientActionId = crypto.randomUUID(), action = { type: 'star', messageId: clientMessageId, starred: true, clientActionId, clientActionCreatedAt: new Date().toISOString() };
+      const actionLock = await advisoryBarrier(blocker, observer, `relay-action:${clientActionId}`);
+      const actions = [mutateChat(owner, action, one), mutateChat(owner, action, two)];
+      try { await actionLock.waitForBlocked([pids[1], pids[2]]); } finally { await actionLock.release(); }
+      const changed = await Promise.all(actions);
+      assert.ok(changed.every(result => result.actionId === clientActionId));
+      assert.equal(Number((await admin`select count(*)::int as count from relay.operations where id=${clientActionId}`)[0].count), 1);
+      assert.equal(Number((await admin`select count(*)::int as count from relay.stars where message_id=${clientMessageId}`)[0].count), 1);
+      assert.equal(await eventCount(admin, conversationId), 1, 'a personal star emits once for its owner');
+      await assert.rejects(mutateChat(owner, { ...action, starred: false }, two), failure(409));
+      completed.push('locked concurrent send/action UUID races');
+    });
+    await t.test('different members competing for the last invitation slot cannot exceed thirty people', async () => {
+      const { owner, peer, conversationId } = await pair('last-slot');
+      await mutateChat(owner, { type: 'invite', conversationId, emails: Array.from({ length: 27 }, (_, n) => `waiting-${n}@native-test.invalid`) }, admin);
+      await admin`delete from relay.events where conversation_id=${conversationId}`;
+      let release!: () => void, entered!: () => void;
+      const ready = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+      const held = blocker.begin(async tx => { await tx`select id from relay.conversations where id=${conversationId} for update`; entered(); await gate; });
+      await ready;
+      const invites = [mutateChat(owner, { type: 'invite', conversationId, emails: ['last-a@native-test.invalid'] }, one), mutateChat(peer, { type: 'invite', conversationId, emails: ['last-b@native-test.invalid'] }, two)];
+      try { await until(async () => Number((await observer`select count(*)::int as count from pg_stat_activity where pid=any(${[pids[1],pids[2]]}::int[]) and cardinality(pg_blocking_pids(pid))>0`)[0].count) === 2, 'both identified invitation transactions'); }
+      finally { release(); await held; }
+      const results = await Promise.allSettled(invites);
+      assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+      const rejected = results.find(result => result.status === 'rejected') as PromiseRejectedResult;
+      assert.ok(rejected.reason instanceof ChatError && /up to 30 people/.test(rejected.reason.message), `expected membership-cap rejection; got ${rejected.reason?.name} (${rejected.reason?.code ?? rejected.reason?.status ?? 'no code'}): ${rejected.reason?.message}`);
+      const slots = await admin`select (select count(*) from relay.participants where conversation_id=${conversationId})+(select count(*) from relay.invites where conversation_id=${conversationId}) as count`;
+      assert.equal(Number(slots[0].count), 30);
+      assert.equal(await eventCount(admin, conversationId), 2, 'one successful invitation fans out to the two current accounts');
+      completed.push('last membership slot across different accounts');
+    });
+    await t.test('rare verified-email changes retry only a definite native deadlock and remain correct', async () => {
+      for (let round = 0; round < 3; round++) {
+        const { owner, peer, conversationId } = await pair(`email-change-race-${round}`);
+        const updatedOwner = { ...owner, email: `updated-owner-${round}@native-test.invalid` }, updatedPeer = { ...peer, email: `updated-peer-${round}@native-test.invalid` };
+        let deadlocks = 0, attempts = 0;
+        const observed = (connection: postgres.Sql) => new Proxy(connection, { get(target, property) {
+          if (property === 'begin') return async (work: (tx: postgres.TransactionSql) => Promise<unknown>) => {
+            attempts++;
+            try { return await target.begin(work); }
+            catch (error) { if (error && typeof error === 'object' && 'code' in error && error.code === '40P01') deadlocks++; throw error; }
+          };
+          return Reflect.get(target, property);
+        } });
+        let release!: () => void, entered!: () => void;
+        const ready = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+        const held = blocker.begin(async tx => { await tx`select id from relay.conversations where id=${conversationId} for update`; entered(); await gate; });
+        await ready;
+        const actionA = crypto.randomUUID(), actionB = crypto.randomUUID(), stamp = new Date().toISOString();
+        const invitations = [
+          mutateChat(updatedOwner, { type: 'invite', conversationId, emails: ['after-change-a@native-test.invalid'], clientActionId: actionA, clientActionCreatedAt: stamp }, observed(one)),
+          mutateChat(updatedPeer, { type: 'invite', conversationId, emails: ['after-change-b@native-test.invalid'], clientActionId: actionB, clientActionCreatedAt: stamp }, observed(two)),
+        ];
+        try { await until(async () => Number((await observer`select count(*)::int as count from pg_stat_activity where pid=any(${[pids[1],pids[2]]}::int[]) and cardinality(pg_blocking_pids(pid))>0`)[0].count) === 2, 'both identified email-update invitation transactions'); }
+        finally { release(); await held; }
+        const results = await Promise.all(invitations);
+        assert.ok(deadlocks >= 1, 'actual PostgreSQL generated a deadlock victim, not a mocked exception');
+        assert.ok(attempts > 2 && attempts <= 6, 'only definite rollback triggered at most three attempts per operation');
+        assert.deepEqual(results.map(result => result.actionId), [actionA, actionB]);
+        assert.equal((await getChat(updatedOwner, admin)).user.email, updatedOwner.email);
+        assert.equal((await getChat(updatedPeer, admin)).user.email, updatedPeer.email);
+        assert.equal(Number((await admin`select count(*)::int as count from relay.invites where conversation_id=${conversationId}`)[0].count), 2);
+        assert.equal(Number((await admin`select count(*)::int as count from relay.operations where id=any(${[actionA, actionB]}::uuid[])`)[0].count), 2);
+        assert.equal(await eventCount(admin, conversationId), 4, 'two successful distinct changes; aborted attempt has no events or receipt');
+      }
+      completed.push('rare verified-email changes with observed native40P01 retry');
+    });
+    await t.test('native commit barriers prove leave-winning and send-winning membership/media order', async () => {
+      const left = await pair('leave-first');
+      const oldFile = chunk(left.conversationId);
+      await stageUpload(left.owner, oldFile, admin);
+      await mutateChat(left.owner, { type: 'send', conversationId: left.conversationId, clientMessageId: oldFile.clientMessageId, text: 'Existing file', attachments: [{ name: oldFile.name, type: oldFile.type, size: oldFile.size, url: `upload:${oldFile.clientMessageId}:0` }] }, admin);
+      await admin`delete from relay.events where conversation_id=${left.conversationId}`;
+      let release!: () => void, entered!: () => void;
+      const ready = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+      // Run the real leave work on a real native transaction, then pause just
+      // before commit. The sender must wait on its uncommitted membership delete.
+      const heldLeaveConnection = new Proxy(one, { get(target, property) {
+        if (property === 'begin') return (work: (tx: postgres.TransactionSql) => Promise<unknown>) => target.begin(async tx => {
+          const result = await work(tx); entered(); await gate; return result;
+        });
+        return Reflect.get(target, property);
+      } });
+      const leaving = mutateChat(left.peer, { type: 'leave', conversationId: left.conversationId }, heldLeaveConnection);
+      let sendingOutcome: Promise<PromiseSettledResult<Awaited<ReturnType<typeof mutateChat>>>> | undefined;
+      const racedMessageId = crypto.randomUUID();
+      let readinessTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([ready, leaving.then(() => { throw new Error('Leave committed before its barrier.'); }), new Promise<never>((_, reject) => { readinessTimer = setTimeout(() => reject(new Error('Leave commit-barrier readiness timed out.')), 10000); })]);
+        const sending = mutateChat(left.peer, { type: 'send', conversationId: left.conversationId, text: 'Racing leave', clientMessageId: racedMessageId }, two);
+        sendingOutcome = Promise.allSettled([sending]).then(results => results[0]);
+        await until(async () => Number((await observer`select count(*)::int as count from pg_stat_activity where pid=${pids[2]} and pg_blocking_pids(pid) @> ${[pids[1]]}::int[]`)[0].count) === 1, 'sender waiting on the identified leave transaction');
+        assert.deepEqual((await getAttachment(left.peer, oldFile.clientMessageId, 0, admin)).bytes, Buffer.from('native file'), 'an MVCC read before leave commits is currently authorized');
+      } finally { if (readinessTimer) clearTimeout(readinessTimer); release(); await leaving.catch(() => {}); }
+      await leaving;
+      const outcome = await sendingOutcome!;
+      assert.equal(outcome.status, 'rejected');
+      if (outcome.status === 'rejected') assert.ok(failure(404)(outcome.reason), 'the committed leave rejects the blocked sender');
+      await assert.rejects(getAttachment(left.peer, oldFile.clientMessageId, 0, admin), failure(404));
+      assert.equal((await getChat(left.peer, admin)).conversations.length, 0);
+      assert.equal(Number((await admin`select count(*)::int as count from relay.messages where conversation_id=${left.conversationId}`)[0].count), 1);
+      assert.equal(await eventCount(admin, left.conversationId), 1, 'no message invalidation is emitted by a rejected send');
+      await assert.rejects(mutateChat(left.peer, { type: 'send', conversationId: left.conversationId, text: 'After completed leave', clientMessageId: crypto.randomUUID() }, two), failure(404));
+      assert.equal((await getChat(left.peer, admin)).messages.length, 0);
+      const first = await pair('send-first'), clientMessageId = crypto.randomUUID(), clientActionId = crypto.randomUUID();
+      const lock = await advisoryBarrier(blocker, observer, `relay-action:${clientActionId}`);
+      const leave = mutateChat(first.peer, { type: 'leave', conversationId: first.conversationId, clientActionId, clientActionCreatedAt: new Date().toISOString() }, two);
+      try {
+        await lock.waitForBlocked([pids[2]]);
+        await mutateChat(first.peer, { type: 'send', conversationId: first.conversationId, clientMessageId, text: 'Commits before leave' }, one);
+      } finally { await lock.release(); }
+      await leave;
+      assert.equal((await getChat(first.owner, admin)).messages.find(message => message.id === clientMessageId)?.text, 'Commits before leave');
+      assert.equal((await getChat(first.peer, admin)).messages.length, 0);
+      assert.equal(await eventCount(admin, first.conversationId), 3, 'two send events plus one post-leave event');
+      completed.push('leave/send/media transaction order');
+    });
+    await t.test('staging quota and immutable chunks survive competing sessions and final send consumes once', async () => {
+      const { owner, peer, conversationId } = await pair('upload-races');
+      for (let i = 0; i < 5; i++) await stageUpload(owner, chunk(conversationId), admin);
+      const a = chunk(conversationId), b = chunk(conversationId);
+      const lock = await advisoryBarrier(blocker, observer, `relay-upload-owner:${owner.id}`);
+      const uploads = [stageUpload(owner, a, one), stageUpload(owner, b, two)];
+      const settled = Promise.allSettled(uploads);
+      try { await lock.waitForBlocked([pids[1],pids[2]]); } finally { await lock.release(); }
+      const results = await settled;
+      assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+      const rejection = results.find(result => result.status === 'rejected') as PromiseRejectedResult;
+      assert.ok(failure(429)(rejection.reason));
+      assert.equal(Number((await admin`select count(*)::int as count from relay.uploads where owner_id=${owner.id}`)[0].count), 6);
+      assert.equal(await eventCount(admin, conversationId), 0);
+      await admin`delete from relay.uploads where owner_id=${owner.id}`;
+      const file = chunk(conversationId);
+      const identical = await Promise.all([stageUpload(owner, file, one), stageUpload(owner, file, two)]);
+      assert.ok(identical.every(result => result.ok));
+      assert.equal(Number((await admin`select count(*)::int as count from relay.uploads where message_id=${file.clientMessageId}`)[0].count), 1);
+      await assert.rejects(stageUpload(owner, { ...file, data: Buffer.from('changed txt').toString('base64') }, two), failure(409));
+      await assert.rejects(stageUpload(peer, file, two), failure(409));
+      const message = { type: 'send', conversationId, text: 'Native upload', clientMessageId: file.clientMessageId, attachments: [{ name: file.name, type: file.type, size: file.size, url: `upload:${file.clientMessageId}:0` }] };
+      const final = await Promise.all([mutateChat(owner, message, one), mutateChat(owner, message, two)]);
+      assert.ok(final.every(result => result.id === file.clientMessageId));
+      assert.equal(Number((await admin`select count(*)::int as count from relay.uploads where message_id=${file.clientMessageId}`)[0].count), 0);
+      assert.deepEqual((await getAttachment(peer, file.clientMessageId, 0, admin)).bytes, Buffer.from('native file'));
+      assert.equal(await eventCount(admin, conversationId), 2);
+      await stageUpload(owner, file, one);
+      assert.equal(Number((await admin`select count(*)::int as count from relay.uploads where message_id=${file.clientMessageId}`)[0].count), 0, 'retry after commit compares existing bytes without recreating staging');
+      completed.push('staging quota/chunk identity/finalization races');
+    });
+    await t.test('the last request-quota slot is atomic across native sessions', async () => {
+      const account = fixtureUser('quota');
+      await admin`insert into relay.request_limits(owner_id,bucket,window_start,requests) values(${account.id},'write',date_trunc('minute',now()),119)`;
+      const results = await Promise.allSettled([enforceRequestLimit(account, 'write', one), enforceRequestLimit(account, 'write', two)]);
+      assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+      assert.ok(failure(429)((results.find(result => result.status === 'rejected') as PromiseRejectedResult).reason));
+      assert.equal(Number((await admin`select requests from relay.request_limits where owner_id=${account.id} and bucket='write'`)[0].requests), 120);
+      completed.push('atomic request quota boundary');
+    });
+    const sourceHashes = Object.fromEntries(await Promise.all(['src/lib/server.ts', 'tests/native-database.test.ts', 'tests/helpers/native-postgres.ts'].map(async path => [path, createHash('sha256').update(await readFile(path)).digest('hex')])));
+    await fixture.close();
+    await recordNativeEvidence('native-database', { scope: 'Fresh disposable native PostgreSQL, actual production SQL functions, five verified TLS driver connections; excludes browser, real provider, production network and managed platform.', version, schemaVersion: 6, distinctConnections: pids.length, cases: completed, passed: completed.length === 7, sourceHashes, durationMs: Date.now() - started, cleanup: 'cluster stopped and temporary directory removed successfully' });
+  } finally { await fixture.close(); }
+});

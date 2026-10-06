@@ -17,7 +17,7 @@ export default function LandingDetails() {
     <section id="sharing" className={`${styles.section} ${styles.soft}`}>
       <div className={styles.heading}><span>MORE THAN WORDS</span><h2>Show it. Say it. Share it.</h2><p>A picture can explain the idea. A voice message can add the context.</p></div>
       <div className={styles.cards}>
-        <article><Image/><h3>Send the full picture</h3><p>Share images and files up to5MB each. Open a larger image preview and download the original.</p></article>
+        <article><Image/><h3>Send the full picture</h3><p>Share images and files up to 5 MB each. Open a larger image preview and download the original.</p></article>
         <article><Mic/><h3>Make room for your voice</h3><p>Record up to two minutes, listen before sending, or attach an audio file. Play, seek, and change the speed when listening.</p></article>
       </div>
     </section>
@@ -29,8 +29,8 @@ export default function LandingDetails() {
       <h2>A few things to know.</h2>
       <details><summary>Do I need to install anything?</summary><p>You can use the app directly in your browser. Adding it to your Home Screen is optional.</p></details>
       <details><summary>Can I use my existing Google Chat conversations?</summary><p>This is an independent messenger. Your conversations and files stay in this app; Google sign-in connects your identity.</p></details>
-      <details><summary>What happens when I lose my connection?</summary><p>Sending pauses while you’re offline. Your draft stays available on the current device, and you can send it after reconnecting.</p></details>
-      <details><summary>Which files can I share?</summary><p>PNG, JPG, GIF and WebP images, PDFs, text files, and supported audio files. Each message can include up to three attachments, each up to5MB.</p></details>
+      <details><summary>What happens when I lose my connection?</summary><p>If a send isn’t confirmed, your draft stays available on this device. Check your connection and press Send to retry.</p></details>
+      <details><summary>Which files can I share?</summary><p>PNG, JPG, GIF and WebP images, PDFs, text files, and supported audio files. Each message can include up to three attachments, each up to 5 MB.</p></details>
     </section>
   </div>;
 }

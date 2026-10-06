@@ -33,6 +33,19 @@ let db: postgres.Sql | undefined;
 let migration: Promise<void> | undefined;
 type Query = postgres.Sql | postgres.TransactionSql;
 
+async function transaction<T>(sql: postgres.Sql, work: (tx: postgres.TransactionSql) => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try { return await sql.begin(work) as T; }
+    catch (error) {
+      // PostgreSQL has definitely rolled back a deadlock victim. Network and
+      // unknown commit outcomes must never cause an automatic mutation replay.
+      if (attempt >= 2 || !error || typeof error !== 'object' || !('code' in error) || error.code !== '40P01') throw error;
+      // Let the surviving transaction release its locks before competing again.
+      await new Promise(resolve => setTimeout(resolve, 25 * 2 ** attempt + Math.floor(Math.random() * 25)));
+    }
+  }
+}
+
 // These tables are accessed only by the authenticated app server. RLS denies
 // direct browser access through a shared Supabase REST endpoint.
 export const SCHEMA = `
@@ -223,9 +236,17 @@ async function prepareUser(sql: Query, user: User) {
   const rawName = metadata.full_name || metadata.name || email.split('@')[0];
   const name = typeof rawName === 'string' && rawName.trim() ? rawName.trim().slice(0, 80) : email.split('@')[0];
   const avatar = safeAvatar(metadata.avatar_url || metadata.picture);
-  await sql`insert into relay.profiles (id,email,name,avatar) values (${user.id},${email},${name},${avatar})
-    on conflict(id) do update set email=excluded.email,avatar=coalesce(relay.profiles.avatar,excluded.avatar)
-    where relay.profiles.email is distinct from excluded.email or (relay.profiles.avatar is null and excluded.avatar is not null)`;
+  // Even a no-op ON CONFLICT DO UPDATE locks a unique-key profile row. Two
+  // members can then deadlock while event foreign keys inspect each other's
+  // profiles. Common requests only read; genuine verified-email/avatar changes
+  // still update, and an initial concurrent sign-in uses an insert-only race.
+  let existing = (await sql`select email,avatar from relay.profiles where id=${user.id}`)[0];
+  if (!existing) {
+    const inserted = await sql`insert into relay.profiles (id,email,name,avatar) values (${user.id},${email},${name},${avatar}) on conflict(id) do nothing returning email,avatar`;
+    existing = inserted[0] ?? (await sql`select email,avatar from relay.profiles where id=${user.id}`)[0];
+  }
+  if (existing.email !== email) await sql`update relay.profiles set email=${email} where id=${user.id} and email is distinct from ${email}`;
+  if (avatar && !existing.avatar) await sql`update relay.profiles set avatar=${avatar} where id=${user.id} and avatar is null`;
   await sql`with claimed as (delete from relay.invites where email=${email} returning conversation_id)
     insert into relay.participants (conversation_id,user_id)
     select conversation_id,${user.id} from claimed
@@ -389,7 +410,7 @@ export function validateUploadChunk(value: unknown): UploadChunk {
 export async function stageUpload(user: User, input: unknown, connection?: postgres.Sql): Promise<{ ok: true }> {
   const chunk = validateUploadChunk(input);
   const sql = connection ?? await database();
-  return sql.begin(async tx => {
+  return transaction(sql, async tx => {
     await prepareUser(tx, user);
     await membership(tx, chunk.conversationId, user.id);
     // Bound concurrent reservations per account, and serialize with final send.
@@ -520,12 +541,14 @@ export function attachmentResponse(file: Attachment, bytes: Buffer): Response {
 }
 
 async function membership(sql: Query, conversationId: string, userId: string) {
-  const rows = await sql`select c.kind from relay.conversations c join relay.participants p on p.conversation_id=c.id where c.id=${conversationId} and p.user_id=${userId} for share of p`;
+  // Protect membership deletion/key changes without blocking independent
+  // last-read/pin/mute updates on the same participant tuple.
+  const rows = await sql`select c.kind from relay.conversations c join relay.participants p on p.conversation_id=c.id where c.id=${conversationId} and p.user_id=${userId} for key share of p`;
   if (!rows.length) throw new ChatError('This conversation is no longer available.', 404);
   return rows[0];
 }
 async function accessibleMessage(sql: Query, messageId: string, userId: string) {
-  const rows = await sql`select m.id,m.conversation_id,m.author_id,m.deleted from relay.messages m join relay.participants p on p.conversation_id=m.conversation_id where m.id=${messageId} and p.user_id=${userId} for update of m for share of p`;
+  const rows = await sql`select m.id,m.conversation_id,m.author_id,m.deleted from relay.messages m join relay.participants p on p.conversation_id=m.conversation_id where m.id=${messageId} and p.user_id=${userId} for update of m for key share of p`;
   if (!rows.length) throw new ChatError('This message is no longer available.', 404);
   return rows[0];
 }
@@ -551,7 +574,7 @@ export async function getChat(user: User, serverConnection?: postgres.Sql): Prom
 export async function getChatResult(user: User, clientActionId?: string, serverConnection?: postgres.Sql): Promise<{ state: ChatState; actionId?: string; id?: string }> {
   const receiptId = clientActionId === undefined ? undefined : uuid(clientActionId);
   const sql = serverConnection ?? await database();
-  return sql.begin(async tx => {
+  return transaction(sql, async tx => {
     await prepareUser(tx, user);
     const receipt = receiptId ? (await tx`select id,result_id from relay.operations where id=${receiptId} and owner_id=${user.id} and expires_at>now()`)[0] : undefined;
     // The receipt contains no original payload. State always reflects current
@@ -575,7 +598,7 @@ export async function mutateChat(user: User, input: unknown, serverConnection?: 
     digest = createHash('sha256').update(canonicalJson({ ...action, clientActionId: undefined })).digest('hex');
   }
   const sql = serverConnection ?? await database();
-  return sql.begin(async tx => {
+  return transaction(sql, async tx => {
     await prepareUser(tx, user);
     const userId = user.id;
     if (actionId) {
