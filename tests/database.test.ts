@@ -13,6 +13,53 @@ function user(id: string, email: string, name: string): User {
   return { id, email, email_confirmed_at: '2026-10-05T00:00:00Z', aud: 'authenticated', app_metadata: {}, user_metadata: { full_name: name }, created_at: '2026-10-05T00:00:00Z' };
 }
 
+test('full reaction payload stays bounded and recent replies retain an older parent without deleting data', async () => {
+  const pg=new PGlite(),sql=sqlAdapter(pg,callback=>pg.transaction(tx=>callback(tx)));
+  const users=Array.from({length:30},(_,index)=>user(crypto.randomUUID(),`reaction-${index}@payload-test.invalid`,`Member ${index}`));
+  try {
+    await applySchema(sql);for(const member of users)await getChat(member,sql);
+    const conversationId=(await mutateChat(users[0],{type:'create',kind:'group',name:'Dense reactions',emails:users.slice(1).map(member=>member.email)},sql)).id!;
+    const parentId=crypto.randomUUID();
+    await pg.query("insert into relay.messages(id,conversation_id,author_id,text,created_at) values($1,$2,$3,'Older thread context',now()-interval '1 day')",[parentId,conversationId,users[0].id]);
+    await pg.query("insert into relay.messages(id,conversation_id,author_id,text,created_at,parent_id) select gen_random_uuid(),$1,$2,'Reply '||n,now()-n*interval '1 second',$3 from generate_series(1,2000) n",[conversationId,users[0].id,parentId]);
+    await pg.query("insert into relay.reactions(message_id,user_id,emoji) select m.id,p.user_id,e.emoji from relay.messages m join relay.participants p on p.conversation_id=m.conversation_id cross join (values ('👍'),('❤️')) e(emoji) where m.conversation_id=$1",[conversationId]);
+    for(const member of [users[0],users[29]]) {
+      const state=await getChat(member,sql);
+      assert.ok(Buffer.byteLength(JSON.stringify({state}))<=MAX_HISTORY_PAYLOAD_BYTES,'all reaction UUIDs, authors and workspace metadata count toward the response bound');
+      assert.ok(state.messages.length>1 && state.messages.length<2000);
+      assert.equal(state.messages[0].id,parentId,'the root outside the recent 2000 rows remains visible');
+      assert.equal(state.messages.at(-1)!.text,'Reply 1','the newest reply remains visible');
+      assert.ok(state.messages.every(message=>!message.parentId||state.messages.some(parent=>parent.id===message.parentId)),'returned replies have their parent context');
+      assert.ok(state.messages.every(message=>message.reactions.length===2&&message.reactions.every(reaction=>reaction.userIds.length===30)),'selected messages retain complete reactions');
+    }
+    const newest=(await getChat(users[0],sql)).messages.at(-1)!;
+    const changed=await mutateChat(users[0],{type:'edit',messageId:newest.id,text:'Edited newest reply',clientActionId:crypto.randomUUID(),clientActionCreatedAt:new Date().toISOString()},sql);
+    assert.ok(Buffer.byteLength(JSON.stringify(changed))<=MAX_HISTORY_PAYLOAD_BYTES,'mutation envelopes stay bounded too');
+    assert.equal(changed.state.messages.at(-1)!.text,'Edited newest reply');
+    assert.equal((await pg.query<{count:number}>('select count(*)::int as count from relay.messages')).rows[0].count,2001);
+    assert.equal((await pg.query<{count:number}>('select count(*)::int as count from relay.reactions')).rows[0].count,120060,'response trimming never deletes reactions');
+  } finally { await pg.close(); }
+});
+
+test('actual JSON escaping counts toward history limits and keeps the newest contiguous working set', async () => {
+  const pg=new PGlite(),sql=sqlAdapter(pg,callback=>pg.transaction(tx=>callback(tx)));
+  const owner=user(crypto.randomUUID(),'escaped@payload-test.invalid','Escaped text');
+  try {
+    await applySchema(sql);await getChat(owner,sql);
+    const conversationId=(await mutateChat(owner,{type:'create',kind:'space',name:'Escaped history',emails:[]},sql)).id!;
+    const escaped='\\"'.repeat(2997);
+    await pg.query("insert into relay.messages(id,conversation_id,author_id,text,created_at) select gen_random_uuid(),$1,$2,lpad(n::text,6,'0')||$3,'2026-10-05T00:00:00Z'::timestamptz+n*interval '1 second' from generate_series(1,2000) n",[conversationId,owner.id,escaped]);
+    const state=await getChat(owner,sql);
+    assert.ok(Buffer.byteLength(JSON.stringify({state}))<=MAX_HISTORY_PAYLOAD_BYTES);
+    assert.ok(state.messages.length>0 && state.messages.length<500,'escaped serialized bytes reduce the selected window');
+    const numbers=state.messages.map(message=>Number(message.text.slice(0,6)));
+    assert.equal(numbers.at(-1),2000);
+    assert.ok(numbers.every((number,index)=>number===numbers[0]+index));
+    assert.ok(state.messages.every(message=>message.text.length===6000));
+    assert.equal((await pg.query<{count:number}>('select count(*)::int as count from relay.messages')).rows[0].count,2000);
+  } finally { await pg.close(); }
+});
+
 test('thirty total slots include pending invitations, bulk mixed recipients and concurrent additions', async () => {
   const pg=new PGlite(),sql=sqlAdapter(pg,callback=>pg.transaction(tx=>callback(tx)));
   const users=Array.from({length:MAX_CONVERSATION_MEMBERS},(_,index)=>user(crypto.randomUUID(),`member-${index}@cap-test.invalid`,`Member ${index}`));
@@ -53,7 +100,7 @@ test('metadata migration preserves legacy binary data and history queries avoid 
     const conversationId=(await mutateChat(alice,{type:'create',kind:'group',name:'Metadata',emails:[bob.email]},sql)).id!;await getChat(bob,sql);
     const bytes=Buffer.from([137,80,78,71,13,10,26,10,1]);
     const saved=await mutateChat(alice,{type:'send',conversationId,text:'Legacy',attachments:[{name:'legacy.png',type:'image/png',size:bytes.length,url:`data:image/png;base64,${bytes.toString('base64')}`}]},sql);
-    await pg.exec('ALTER TABLE relay.messages DROP COLUMN attachment_metadata; DELETE FROM relay.schema_migrations WHERE version=5; INSERT INTO relay.schema_migrations(version) VALUES(4) ON CONFLICT DO NOTHING;');
+    await pg.exec('ALTER TABLE relay.messages DROP COLUMN attachment_metadata; DELETE FROM relay.schema_migrations WHERE version>=5; INSERT INTO relay.schema_migrations(version) VALUES(4) ON CONFLICT DO NOTHING;');
     await applySchema(sql);observed.length=0;
     const state=await getChat(bob,sql);assert.equal(state.messages[0].attachments[0].url,`/api/attachments?messageId=${saved.id}&index=0`);
     const metadata=(await pg.query<{attachment_metadata:unknown[]}>('select attachment_metadata from relay.messages where id=$1',[saved.id])).rows[0].attachment_metadata;
@@ -147,7 +194,7 @@ test('schema upgrade preserves data and keeps operation receipts unavailable to 
     await pg.exec('DROP TABLE relay.operations; DELETE FROM relay.schema_migrations; INSERT INTO relay.schema_migrations(version) VALUES(3);');
     await applySchema(sql); await applySchema(sql);
     assert.equal((await getChat(alice,sql)).user.name,'Alice');
-    assert.equal((await pg.query('select * from relay.schema_migrations where version=5')).rows.length,1);
+    assert.equal((await pg.query('select * from relay.schema_migrations where version=6')).rows.length,1);
     const schema=await pg.query<{relrowsecurity:boolean}>("select relrowsecurity from pg_class where oid='relay.operations'::regclass"); assert.equal(schema.rows[0].relrowsecurity,true);
     for(const role of ['anon','authenticated']) { await pg.exec(`SET ROLE ${role}`); await assert.rejects(pg.query('select * from relay.operations'),/permission denied/); await pg.exec('RESET ROLE'); }
   } finally { await pg.close(); }
@@ -170,7 +217,7 @@ test('real PostgreSQL schema and two-account chat preserve membership and per-us
     assert.equal(observed.length, 3, 'installed schema requires only advisory lock and two metadata reads');
     assert.equal(observed.some(query => /CREATE|ALTER|REVOKE/i.test(query)), false);
     assert.equal((await pg.query('select version from relay.schema_migrations')).rows.length, 1);
-    assert.equal((await pg.query<{ version: number }>('select version from relay.schema_migrations')).rows[0].version, 5);
+    assert.equal((await pg.query<{ version: number }>('select version from relay.schema_migrations')).rows[0].version, 6);
     assert.equal((await pg.query("select * from pg_publication_tables where pubname='supabase_realtime' and schemaname='relay' and tablename='events'")).rows.length, 1);
     assert.deepEqual((await getChat(alice, sql)).conversations, []);
     const created = await mutateChat(alice, { type: 'create', name: 'Bob', kind: 'dm', emails: ['BOB@example.com'] }, sql);
@@ -375,7 +422,7 @@ test('staging reservations stay bounded and migration upgrades preserve existing
     await pg.exec('DROP TABLE relay.uploads; DELETE FROM relay.schema_migrations; INSERT INTO relay.schema_migrations(version) VALUES(2);');
     await applySchema(sql); await applySchema(sql);
     assert.equal((await getChat(alice, sql)).messages[0].id, saved.id);
-    assert.deepEqual((await pg.query<{ version: number }>('select version from relay.schema_migrations order by version')).rows.map(row => row.version), [2, 5]);
+    assert.deepEqual((await pg.query<{ version: number }>('select version from relay.schema_migrations order by version')).rows.map(row => row.version), [2, 6]);
     const bytes = Buffer.alloc(MAX_ATTACHMENT_BYTES); Buffer.from([137,80,78,71,13,10,26,10]).copy(bytes);
     for (let index = 0; index < 4; index++) await stageUpload(alice, uploadChunks(crypto.randomUUID(), conversationId, bytes)[0], sql);
     await assert.rejects(stageUpload(alice, uploadChunks(crypto.randomUUID(), conversationId, bytes)[0], sql), (e: unknown) => e instanceof ChatError && e.status === 429);

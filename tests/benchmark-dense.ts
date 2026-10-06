@@ -23,6 +23,6 @@ async function main(){
       console.log(JSON.stringify(rows.at(-1)));
     }finally{await pg.close();}
   }
-  const directory=resolve('../../work/qa/group-performance');mkdirSync(directory,{recursive:true});writeFileSync(resolve(directory,`${stage}-dense.json`),JSON.stringify({scope:'Disposable local SQL and JavaScript server materialization, excludes auth/network/hosting.',rows},null,2)+'\n');
+  const directory=process.env.CHAT_EVIDENCE_DIR?resolve(process.env.CHAT_EVIDENCE_DIR):resolve('test-results/group-performance');mkdirSync(directory,{recursive:true});writeFileSync(resolve(directory,`${stage}-dense.json`),JSON.stringify({scope:'Disposable local SQL and JavaScript server materialization, excludes auth/network/hosting.',rows},null,2)+'\n');
 }
 void main().catch(error=>{console.error(error instanceof Error?error.message:'Dense benchmark failed');process.exitCode=1;});

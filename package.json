@@ -20,7 +20,9 @@
     "test:media": "playwright test --config playwright.media.config.ts",
     "test:mini": "playwright test --config playwright.mini.config.ts",
     "test:voice": "playwright test --config playwright.voice.config.ts",
-    "test:interaction": "playwright test --config playwright.interaction.config.ts"
+    "test:interaction": "playwright test --config playwright.interaction.config.ts",
+    "test:security": "playwright test --config playwright.security.config.ts",
+    "test:frontend-security": "playwright test --config playwright.frontend-security.config.ts"
   },
   "dependencies": {
     "@emoji-mart/data": "1.2.1",

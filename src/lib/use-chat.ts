@@ -10,6 +10,7 @@ import { withRequestDeadline } from './request-deadline';
 import { uploadAttachments } from './media-upload';
 import { authenticatedFetch, refreshFailure } from './authenticated-fetch';
 import { PendingActionIds } from './action-identity';
+import { beginLogin, cleanLoginCallback, inspectLoginCallback, LOGIN_REQUEST_KEY } from './login-callback';
 export { withRequestDeadline } from './request-deadline';
 
 type Config = { supabaseUrl: string; supabaseAnonKey: string; databaseConfigured: boolean };
@@ -292,7 +293,11 @@ export function useChat(): ChatController {
     let initialized = false;
     const accept = (session: Session | null) => {
       if (disposed || modeRef.current === 'demo' || (dismissed.current && session)) return;
-      if (!session) { reset('guest'); return; }
+      if (!session) {
+        if (modeRef.current !== 'guest') reset('guest');
+        else if (mounted.current) setLoading(false);
+        return;
+      }
       if (modeRef.current !== 'auth' || identityRef.current !== session.user.id) reset('auth', session.user.id, session.access_token);
       else tokenRef.current = session.access_token;
       if (clientRef.current && realtimeChannel.current) void clientRef.current.realtime.setAuth(session.access_token).catch(() => undefined);
@@ -310,6 +315,16 @@ export function useChat(): ChatController {
       const controller = new AbortController();
       bootstrap = controller;
       controllers.current.add(controller);
+      const callbackUrl = new URL(window.location.href);
+      let callback = { hasCallback: false, accepted: false };
+      try { callback = inspectLoginCallback(callbackUrl, sessionStorage); } catch {
+        callback = inspectLoginCallback(callbackUrl, { getItem: () => null });
+      }
+      // Reject unsolicited token URLs before the SDK can replace the session.
+      if (callback.hasCallback && !callback.accepted) {
+        window.history.replaceState(null, '', cleanLoginCallback(callbackUrl));
+        setError('This sign-in request could not be verified. Please use Continue with Google to try again.');
+      }
       try {
         const config = await withRequestDeadline(controller, 8000, async () => {
           const response = await fetch('/api/config', { cache: 'no-store', signal: controller.signal });
@@ -325,7 +340,7 @@ export function useChat(): ChatController {
         setAuthAvailable(valid);
         if (!valid) { initialized = true; if (!restoreDemo()) setLoading(false); return; }
         const client = createClient(config.supabaseUrl, config.supabaseAnonKey, {
-          auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit', storageKey: AUTH_STORAGE_KEY },
+          auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: callback.accepted, flowType: 'implicit', storageKey: AUTH_STORAGE_KEY },
         });
         clientRef.current = client;
         initialized = true;
@@ -348,20 +363,26 @@ export function useChat(): ChatController {
         };
         const { data: listener } = client.auth.onAuthStateChange((_event, session) => accept(session));
         unsubscribe = () => listener.subscription.unsubscribe();
-        const hash = new URLSearchParams(window.location.hash.slice(1));
-        const { data, error: authError } = await withRequestDeadline(controller, 8000, () => client.auth.getSession());
+        const hash = new URLSearchParams(callbackUrl.hash.slice(1));
+        const restored = await withRequestDeadline(controller, 8000, () => client.auth.getSession());
         if (disposed) return;
-        // Callback tokens must never remain in the visible URL or browser history.
-        if (hash.has('access_token') || hash.has('refresh_token') || hash.has('error')) window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        const { data, error: authError } = restored;
         if (data.session || !restoreDemo()) accept(data.session);
-        if (authError || hash.has('error')) setError('Google sign-in did not complete. Please try again.');
+        if (authError || (callback.accepted && hash.has('error'))) setError('Google sign-in did not complete. Please try again.');
+        else if (callback.hasCallback && !callback.accepted) setError('This sign-in request could not be verified. Please use Continue with Google to try again.');
       } catch (failure) {
         if (!disposed && !(failure instanceof Error && failure.name === 'AbortError')) {
           restoreDemo();
           setError('Unable to connect. Check your connection and refresh the page.');
           setLoading(false);
         }
-      } finally { controllers.current.delete(controller); initializing = false; }
+      } finally {
+        if (!disposed && callback.hasCallback) {
+          window.history.replaceState(null, '', cleanLoginCallback(callbackUrl));
+          try { sessionStorage.removeItem(LOGIN_REQUEST_KEY); } catch {}
+        }
+        controllers.current.delete(controller); initializing = false;
+      }
     };
     const connectivity = () => {
       setOffline(!navigator.onLine);
@@ -494,9 +515,14 @@ export function useChat(): ChatController {
     if (!authAvailable || !configRef.current) { setError('Google sign-in is unavailable. Please try again when you’re connected.'); return; }
     dismissed.current = false;
     try { localStorage.removeItem(DEMO_CHOICE_KEY); } catch { /* Demo preference is optional. */ }
-    const url = new URL('https://oauth.trytofu.ai/start');
-    url.searchParams.set('return', `${window.location.origin}/`);
-    window.location.assign(url.href);
+    try {
+      const callback = beginLogin(`${window.location.origin}/`, sessionStorage);
+      const url = new URL('https://oauth.trytofu.ai/start');
+      url.searchParams.set('return', callback);
+      window.location.assign(url.href);
+    } catch {
+      setError('This browser could not save the sign-in request. Allow site storage, then try Continue with Google again.');
+    }
   }, [authAvailable]);
 
   const signOut = useCallback(async () => {
@@ -504,6 +530,7 @@ export function useChat(): ChatController {
     pendingSends.current.clear(true);
     pendingActions.current.clear(true);
     reset('guest');
+    try { sessionStorage.removeItem(LOGIN_REQUEST_KEY); } catch {}
     try { localStorage.removeItem(AUTH_STORAGE_KEY); localStorage.removeItem(DEMO_CHOICE_KEY); } catch { /* Private browsing may disable storage. */ }
     const client = clientRef.current;
     if (client) {

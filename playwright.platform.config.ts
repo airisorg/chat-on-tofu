@@ -18,6 +18,9 @@ export default defineConfig({
   outputDir: "test-results/platform-test-results",
   use: {
     baseURL,
+    // Keep routed fake-auth/media fixtures isolated from SW-controlled requests.
+    // Real service-worker behavior is covered by playwright.offline.config.ts.
+    serviceWorkers: "block",
     viewport: { width: 1440, height: 960 },
     trace: "retain-on-failure",
   },

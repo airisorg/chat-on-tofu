@@ -9,7 +9,7 @@ import type { ChatAction } from '../src/lib/types';
 import { UPLOAD_CHUNK_BYTES } from '../src/lib/media-limits';
 
 const stage = process.argv[2] || 'baseline';
-const directory = resolve('../../work/qa/group-performance');
+const directory = process.env.CHAT_EVIDENCE_DIR ? resolve(process.env.CHAT_EVIDENCE_DIR) : resolve('test-results/group-performance');
 mkdirSync(directory,{recursive:true});
 type Sample={ms:number,queries:number,bytes:number,events:number};
 type Row={action:string,samples:number,medianMs:number,p95Ms:number,minMs:number,maxMs:number,medianQueries:number,medianResponseBytes:number,eventsPerAction:number[]};

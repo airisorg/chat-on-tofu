@@ -949,7 +949,14 @@ test("installed-mode Google sign-in derives the broker return from this app orig
   await expect.poll(() => broker).not.toBe("");
   const url = new URL(broker);
   expect(url.origin).toBe("https://oauth.trytofu.ai");
-  expect(url.searchParams.get("return")).toBe(`${new URL(baseURL!).origin}/`);
+  const callback = new URL(url.searchParams.get("return")!);
+  expect(callback.origin).toBe(new URL(baseURL!).origin);
+  expect(callback.pathname).toBe("/");
+  expect(callback.hash).toBe("");
+  expect(callback.searchParams.get("chat_login_nonce")).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+  );
+  expect([...callback.searchParams.keys()]).toEqual(["chat_login_nonce"]);
 });
 
 test("real M4A picker alias sends as canonical MP4 audio, decodes and survives reload", async ({

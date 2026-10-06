@@ -1,7 +1,7 @@
 import { createClient, type User } from '@supabase/supabase-js';
 import postgres from 'postgres';
 import { createHash } from 'node:crypto';
-import type { Attachment, ChatAction, ChatState, Person } from './types';
+import type { Attachment, ChatAction, ChatState, Message, Person } from './types';
 import { ACTION_RETRY_WINDOW_MS, MAX_RECENT_ACTIONS, canonicalJson } from './action-identity';
 import { MAX_CONVERSATION_MEMBERS } from './chat-limits';
 import { isNativeEmoji } from './native-emoji';
@@ -95,6 +95,11 @@ CREATE TABLE IF NOT EXISTS relay.operations (
   digest text NOT NULL CHECK(length(digest)=64), result_id uuid,
   created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL
 );
+CREATE TABLE IF NOT EXISTS relay.request_limits (
+  owner_id text NOT NULL, bucket text NOT NULL CHECK(bucket IN ('read','write','upload','media')),
+  window_start timestamptz NOT NULL, requests integer NOT NULL CHECK(requests>0),
+  PRIMARY KEY(owner_id,bucket,window_start)
+);
 CREATE INDEX IF NOT EXISTS relay_participants_user ON relay.participants(user_id);
 ALTER TABLE relay.messages ADD COLUMN IF NOT EXISTS attachment_metadata jsonb NOT NULL DEFAULT '[]';
 UPDATE relay.messages SET attachment_metadata=(
@@ -120,6 +125,7 @@ ALTER TABLE relay.schema_migrations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE relay.events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE relay.uploads ENABLE ROW LEVEL SECURITY;
 ALTER TABLE relay.operations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE relay.request_limits ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON ALL TABLES IN SCHEMA relay FROM PUBLIC;
 `;
 
@@ -128,7 +134,7 @@ export async function applySchema(sql: postgres.Sql): Promise<void> {
     await tx`select pg_advisory_xact_lock(724931108)`;
     const marker = await tx`select to_regclass('relay.schema_migrations') is not null as present`;
     if (marker[0].present) {
-      const installed = await tx`select version from relay.schema_migrations where version=5`;
+      const installed = await tx`select version from relay.schema_migrations where version=6`;
       if (installed.length) return;
     }
     // Static trusted schema only; all user values use bound parameters.
@@ -150,7 +156,7 @@ export async function applySchema(sql: postgres.Sql): Promise<void> {
       const published = await tx`select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='relay' and tablename='events'`;
       if (!published.length) await tx.unsafe('ALTER PUBLICATION supabase_realtime ADD TABLE relay.events');
     }
-    await tx`insert into relay.schema_migrations(version) values(5) on conflict do nothing`;
+    await tx`insert into relay.schema_migrations(version) values(6) on conflict do nothing`;
   });
 }
 
@@ -187,9 +193,28 @@ export async function authenticatedUser(request: Request): Promise<User> {
   return data.user;
 }
 
+export type RequestBucket = 'read' | 'write' | 'upload' | 'media';
+const REQUEST_LIMITS: Record<RequestBucket, number> = { read: 600, write: 120, upload: 120, media: 120 };
+
+/** Atomic database counters span server instances; only verified account IDs reach this helper. */
+export async function enforceRequestLimit(user: User, bucket: RequestBucket, connection?: postgres.Sql): Promise<void> {
+  const sql = connection ?? await database();
+  const rows = await sql`insert into relay.request_limits(owner_id,bucket,window_start,requests)
+    values(${user.id},${bucket},date_trunc('minute',now()),1)
+    on conflict(owner_id,bucket,window_start) do update set requests=relay.request_limits.requests+1
+    where relay.request_limits.requests < ${REQUEST_LIMITS[bucket]} returning requests`;
+  if (!rows.length) throw new ChatError('Too many requests. Please wait a minute, then try again.', 429);
+  if (Number(rows[0].requests) === 1) await sql`delete from relay.request_limits
+    where owner_id=${user.id} and bucket=${bucket} and window_start < date_trunc('minute',now())-interval '2 minutes'`;
+}
+
 function safeAvatar(value: unknown) {
   if (typeof value !== 'string' || value.length > 2000) return null;
-  try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password ? url.href : null; } catch { return null; }
+  try {
+    const url = new URL(value);
+    const googleImage = ['googleusercontent.com', 'gstatic.com'].some(host => url.hostname === host || url.hostname.endsWith(`.${host}`));
+    return url.protocol === 'https:' && !url.username && !url.password && googleImage ? url.href : null;
+  } catch { return null; }
 }
 
 async function prepareUser(sql: Query, user: User) {
@@ -208,7 +233,7 @@ async function prepareUser(sql: Query, user: User) {
 }
 
 function person(row: Record<string, unknown>): Person {
-  return { id: String(row.id), name: String(row.name), email: String(row.email), avatar: row.avatar ? String(row.avatar) : undefined, color: '#1967d2', status: String(row.status ?? 'Available') };
+  return { id: String(row.id), name: String(row.name), email: String(row.email), avatar: safeAvatar(row.avatar) ?? undefined, color: '#1967d2', status: String(row.status ?? 'Available') };
 }
 function iso(value: unknown) { return new Date(value as string).toISOString(); }
 
@@ -245,8 +270,22 @@ async function stateFor(sql: Query, userId: string): Promise<ChatState> {
     where m.payload_bytes <= ${MAX_HISTORY_PAYLOAD_BYTES} order by m.created_at desc,m.id desc`;
   const [profiles, conversations, members, invites, messages] = await Promise.all([profileQuery, conversationQuery, memberQuery, inviteQuery, messageQuery]);
   if (!profiles.length) throw new ChatError('Your profile is not available.', 500);
+  const messageIds = new Set(messages.map(message => String(message.id)));
+  const missingParents = [...new Set(messages.flatMap(message => message.parent_id && !messageIds.has(String(message.parent_id)) ? [String(message.parent_id)] : []))];
+  // A reply's older root may lie outside the working history. Include owned
+  // root context before applying the final byte budget, without reading media.
+  const parents = missingParents.length ? await sql`select m.id,m.conversation_id,m.author_id,m.text,m.created_at,m.edited,m.deleted,m.parent_id,
+    coalesce((select jsonb_agg((file.value - 'url') || jsonb_build_object('url',
+      '/api/attachments?messageId=' || m.id::text || '&index=' || (file.ordinality-1)::text)
+      order by file.ordinality) from jsonb_array_elements(m.attachment_metadata) with ordinality as file(value,ordinality)), '[]'::jsonb) as attachments,
+    p.name,p.email,p.avatar,p.status,
+    exists(select 1 from relay.stars s where s.message_id=m.id and s.user_id=${userId}) as starred
+    from relay.messages m join relay.profiles p on p.id=m.author_id
+    join relay.participants mine on mine.conversation_id=m.conversation_id and mine.user_id=${userId}
+    where m.id=any(${missingParents}::uuid[]) and m.parent_id is null` : [];
+  const availableMessages = [...messages, ...parents];
   const reactions = messages.length ? await sql`select r.message_id,r.emoji,array_agg(r.user_id order by r.user_id) as user_ids from relay.reactions r
-    where r.message_id = any(${messages.map(m => String(m.id))}::uuid[]) group by r.message_id,r.emoji` : [];
+    where r.message_id = any(${availableMessages.map(m => String(m.id))}::uuid[]) group by r.message_id,r.emoji` : [];
   const membersByConversation = new Map<string, Person[]>();
   for (const member of members) {
     const key = String(member.conversation_id);
@@ -266,16 +305,43 @@ async function stateFor(sql: Query, userId: string): Promise<ChatState> {
     list.push({emoji:String(reaction.emoji),userIds:(reaction.user_ids as unknown[]).map(String)});
     reactionsByMessage.set(key,list);
   }
-  return {
+  const state: ChatState = {
     user: person(profiles[0]),
     conversations: conversations.map(c => {
       const allMembers = membersByConversation.get(String(c.id)) ?? [];
       return { id: String(c.id), name: c.kind === 'dm' ? allMembers.find(p => p.id !== userId)?.name ?? String(c.name) : String(c.name), kind: c.kind as 'dm' | 'group' | 'space', members: allMembers, description: String(c.description), lastMessage: c.last_message ? String(c.last_message) : undefined, updatedAt: iso(c.updated_at), unread: c.force_unread ? Math.max(1, Number(c.unread)) : Number(c.unread), pinned: Boolean(c.pinned), muted: Boolean(c.muted), section: String(c.section) };
     }),
-    messages: messages.reverse().map(m => {
+    messages: availableMessages.map(m => {
       return { id: String(m.id), conversationId: String(m.conversation_id), author: person({ ...m, id: m.author_id }), text: m.deleted ? '' : String(m.text), createdAt: iso(m.created_at), edited: Boolean(m.edited), deleted: Boolean(m.deleted), parentId: m.parent_id ? String(m.parent_id) : undefined, starred: !m.deleted && Boolean(m.starred), attachments: m.deleted ? [] : (m.attachments as Attachment[]), reactions: m.deleted ? [] : reactionsByMessage.get(String(m.id)) ?? [] };
     }),
   };
+  return boundStatePayload(state);
+}
+
+function boundStatePayload(state: ChatState): ChatState {
+  const candidates = [...state.messages].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+  const byId = new Map(candidates.map(message => [message.id, message]));
+  const selected = new Map<string, Message>();
+  // Count the actual serialized fields, including reaction UUIDs, escaped text,
+  // authors and conversation members. Leave room for the small API envelope.
+  let bytes = Buffer.byteLength(JSON.stringify({ ...state, messages: [] }));
+  const limit = MAX_HISTORY_PAYLOAD_BYTES - 1024;
+  if (bytes > limit) throw new ChatError('This workspace is too large to load. Contact support.', 503);
+  const messageBytes = new Map(candidates.map(message => [message.id, Buffer.byteLength(JSON.stringify(message)) + 1]));
+  for (const message of candidates) {
+    if (selected.has(message.id)) continue;
+    const bundle = new Map<string, Message>();
+    let current: Message | undefined = message;
+    while (current && !selected.has(current.id) && !bundle.has(current.id)) {
+      bundle.set(current.id, current);
+      current = current.parentId ? byId.get(current.parentId) : undefined;
+    }
+    const extraBytes = [...bundle.keys()].reduce((total, id) => total + messageBytes.get(id)!, 0);
+    if (selected.size + bundle.size > 2000 || bytes + extraBytes > limit) break;
+    for (const item of bundle.values()) selected.set(item.id, item);
+    bytes += extraBytes;
+  }
+  return { ...state, messages: candidates.filter(message => selected.has(message.id)).reverse() };
 }
 
 function text(value: unknown, max: number, label: string, empty = false) {

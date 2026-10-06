@@ -404,6 +404,9 @@ export default function ChatApp() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const threadScrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const fileReadQueue = useRef<Promise<void>>(Promise.resolve());
+  const fileReaders = useRef(new Set<FileReader>());
+  const fileSelection = useRef({ owner: "", conversationId: "", revision: 0 });
   const searchRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const threadComposerRef = useRef<HTMLTextAreaElement>(null);
@@ -451,6 +454,17 @@ export default function ChatApp() {
   const state = chat.state;
   const currentUserNow = useRef<string | null>(null);
   currentUserNow.current = state?.user.id || null;
+  const fileOwner = state?.user.id || "";
+  const fileConversation = selectedId || "";
+  if (fileSelection.current.owner !== fileOwner || fileSelection.current.conversationId !== fileConversation) {
+    fileSelection.current = { owner: fileOwner, conversationId: fileConversation, revision: fileSelection.current.revision + 1 };
+  }
+  useEffect(() => {
+    return () => {
+      for (const reader of fileReaders.current) reader.abort();
+      fileReaders.current.clear();
+    };
+  }, [fileOwner, fileConversation]);
   const selected = state?.conversations.find((c) => c.id === selectedId);
   const miniConversation = state?.conversations.find((c) => c.id === miniId);
   const messages =
@@ -950,51 +964,61 @@ export default function ChatApp() {
     }
   }
   async function addFiles(files: FileList | null) {
-    if (!files) return;
-    const incoming: Attachment[] = [];
-    for (const f of Array.from(files)) {
-      const rawType = f.type.toLowerCase().split(";")[0];
-      const type =
-        rawType === "audio/x-m4a" ||
-        rawType === "audio/m4a" ||
-        (!rawType && /\.m4a$/i.test(f.name))
-          ? "audio/mp4"
-          : rawType === "audio/x-wav"
-            ? "audio/wav"
-            : rawType;
-      if (f.size > MAX_ATTACHMENT_BYTES) {
-        setToast(`${f.name} is too large. Choose a file 5 MB or smaller.`);
-        continue;
+    if (!files || !selected || !state) return;
+    const chosen = Array.from(files);
+    const ticket = { ...fileSelection.current };
+    const input = fileRef.current;
+    if (input) input.value = "";
+    const stillOwned = () => currentUserNow.current === ticket.owner &&
+      draftOwner.current === ticket.owner && fileSelection.current.revision === ticket.revision;
+    const task = fileReadQueue.current.catch(() => undefined).then(async () => {
+      if (!stillOwned()) return;
+      const incoming: Attachment[] = [];
+      for (const f of chosen) {
+        if (!stillOwned()) return;
+        const rawType = f.type.toLowerCase().split(";")[0];
+        const type = rawType === "audio/x-m4a" || rawType === "audio/m4a" ||
+          (!rawType && /\.m4a$/i.test(f.name)) ? "audio/mp4" : rawType === "audio/x-wav" ? "audio/wav" : rawType;
+        if (!f.size || f.size > MAX_ATTACHMENT_BYTES) {
+          setToast(`${f.name} could not be added. Choose a nonempty file 5 MB or smaller.`);
+          continue;
+        }
+        if (mainDraftNow.current.attachments.length + incoming.length >= MAX_ATTACHMENTS) {
+          setToast(`You can attach up to ${MAX_ATTACHMENTS} files per message.`);
+          break;
+        }
+        if (!/^(image\/(png|jpeg|gif|webp)|text\/plain|application\/pdf|audio\/(webm|mp4|ogg|mpeg|wav))$/.test(type)) {
+          setToast("Choose a PNG, JPG, GIF, WebP image, text file, PDF, or audio file.");
+          continue;
+        }
+        try {
+          const url = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            fileReaders.current.add(reader);
+            const finish = () => fileReaders.current.delete(reader);
+            reader.onload = () => { finish(); resolve(String(reader.result)); };
+            reader.onerror = () => { finish(); reject(new Error("This file couldn’t be read. Please select it again.")); };
+            reader.onabort = () => { finish(); reject(new Error("File selection was cancelled.")); };
+            reader.readAsDataURL(f);
+          });
+          // A selection belongs only to the account and conversation that began it.
+          if (!stillOwned()) return;
+          incoming.push({ name: f.name, type, size: f.size, url: url.replace(/^data:[^;]+;/, `data:${type};`) });
+        } catch (failure) {
+          if (!stillOwned()) return;
+          setToast(failure instanceof Error ? failure.message : "This file couldn’t be attached. Please select it again.");
+        }
       }
-      if (attachments.length + incoming.length >= MAX_ATTACHMENTS) {
+      if (!stillOwned() || !incoming.length) return;
+      const current = mainDraftNow.current;
+      const next = [...current.attachments, ...incoming].slice(0, MAX_ATTACHMENTS);
+      if (next.length < current.attachments.length + incoming.length)
         setToast(`You can attach up to ${MAX_ATTACHMENTS} files per message.`);
-        break;
-      }
-      if (
-        !/^(image\/(png|jpeg|gif|webp)|text\/plain|application\/pdf|audio\/(webm|mp4|ogg|mpeg|wav))$/.test(
-          type,
-        )
-      ) {
-        setToast(
-          "Choose a PNG, JPG, GIF, WebP image, text file, PDF, or audio file.",
-        );
-        continue;
-      }
-      const url = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = reject;
-        reader.readAsDataURL(f);
-      });
-      incoming.push({
-        name: f.name,
-        type,
-        size: f.size,
-        url: url.replace(/^data:[^;]+;/, `data:${type};`),
-      });
-    }
-    setAttachments((current) => [...current, ...incoming]);
-    if (fileRef.current) fileRef.current.value = "";
+      mainDraftNow.current = { ...current, attachments: next };
+      setAttachments(next);
+    });
+    fileReadQueue.current = task;
+    await task;
   }
   async function copyInvitation(conversation: Conversation) {
     const url = `${location.origin}/?join=${encodeURIComponent(conversation.id)}`;
