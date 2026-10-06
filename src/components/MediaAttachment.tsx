@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { ArrowDownToLine, File, Mic, RefreshCw } from "lucide-react";
 import type { Attachment } from "@/lib/types";
+import AudioPlayer from "./AudioPlayer";
 import styles from "./MediaAttachment.module.css";
 
 export default function MediaAttachment({
@@ -86,23 +87,20 @@ export default function MediaAttachment({
           <ArrowDownToLine size={17} />
         </a>
       ) : attachment.type.startsWith("audio/") ? (
-        <div className="audio-attachment">
-          <audio
-            controls
-            preload="metadata"
-            src={attachment.url}
-            aria-label={`Play ${attachment.name}`}
-          />
-          <a href={attachment.url} download={attachment.name}>
-            <Mic size={14} />
-            {attachment.name}
-            <ArrowDownToLine size={14} />
-          </a>
-        </div>
+        <AudioPlayer
+          src={attachment.url}
+          name={attachment.name}
+          size={attachment.size}
+        />
       ) : (
         <a
           href={attachment.url}
           download={attachment.name}
+          aria-label={
+            attachment.type.startsWith("image/")
+              ? `Preview ${attachment.name}`
+              : undefined
+          }
           aria-haspopup={
             attachment.type.startsWith("image/") ? "dialog" : undefined
           }
@@ -116,7 +114,7 @@ export default function MediaAttachment({
           }
           className={
             attachment.type.startsWith("image/")
-              ? "image-attachment"
+              ? `image-attachment ${styles.imageTile}`
               : "file-attachment"
           }
         >
@@ -125,12 +123,14 @@ export default function MediaAttachment({
           ) : (
             <File size={21} />
           )}
-          <span>
-            {attachment.name}
-            <small>
-              {Math.max(1, Math.round(attachment.size / 1024))} KB · Download
-            </small>
-          </span>
+          {!attachment.type.startsWith("image/") && (
+            <span>
+              {attachment.name}
+              <small>
+                {Math.max(1, Math.round(attachment.size / 1024))} KB · Download
+              </small>
+            </span>
+          )}
         </a>
       )}
     </div>

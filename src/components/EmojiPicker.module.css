@@ -1,0 +1,236 @@
+.picker {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--font-title);
+  background: var(--surface);
+}
+.searchRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 8px;
+  flex-shrink: 0;
+}
+.search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-soft);
+  padding: 0 10px;
+  color: var(--muted);
+}
+.search input {
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 20px;
+  font-family: var(--font-title);
+}
+.search input::placeholder {
+  color: var(--muted);
+}
+.search:focus-within {
+  border-color: var(--blue);
+}
+.search button {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--ink);
+  border-radius: 50%;
+}
+.toneControl {
+  position: relative;
+  flex-shrink: 0;
+}
+.toneTrigger {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  padding: 0;
+  font-size: 22px;
+}
+.toneTrigger:hover,
+.search button:hover {
+  background: var(--hover);
+}
+.tones {
+  position: absolute;
+  right: 0;
+  top: 38px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 3px 10px #0003;
+  z-index: 2;
+}
+.tones button {
+  width: 40px;
+  height: 36px;
+  padding: 0;
+  border-radius: 4px;
+  font-size: 24px;
+}
+.tones button:hover,
+.tones button[aria-checked="true"] {
+  background: var(--selected);
+}
+.categories {
+  display: flex;
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 5px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  scrollbar-width: none;
+}
+.categories::-webkit-scrollbar {
+  display: none;
+}
+.categories button {
+  display: grid;
+  place-items: center;
+  flex: 1 0 40px;
+  width: 40px;
+  height: 32px;
+  padding: 0;
+  color: var(--muted);
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+}
+.categories button:hover {
+  background: var(--hover);
+}
+.categories button[aria-selected="true"] {
+  color: var(--blue);
+  border-bottom-color: var(--blue);
+}
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0 10px;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.body section {
+  margin: 0;
+  padding: 0;
+}
+.body h3 {
+  padding: 8px 12px 4px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+  color: var(--muted);
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(9, 40px);
+  justify-content: center;
+}
+.emoji {
+  display: grid;
+  place-items: center;
+  height: 40px;
+  min-width: 0;
+  padding: 0;
+  border-radius: 50%;
+  background: transparent;
+  font-size: 28px;
+  line-height: 1;
+  font-family:
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+}
+.emoji:hover,
+.emoji:focus-visible {
+  background: var(--hover);
+}
+.empty {
+  margin: 12px 8px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 20px;
+}
+.compact .grid {
+  grid-template-columns: repeat(9, 32px);
+}
+.compact .emoji {
+  height: 32px;
+  font-size: 24px;
+}
+.compact .categories button {
+  flex: 1 0 32px;
+  width: 32px;
+}
+.compact .searchRow {
+  padding: 8px;
+}
+@media (max-width: 767px), (pointer: coarse) {
+  .search {
+    height: 44px;
+  }
+  .search input {
+    font-size: 16px;
+  }
+  .search button {
+    width: 44px;
+    height: 44px;
+    margin-right: -10px;
+  }
+  .toneTrigger {
+    width: 44px;
+    height: 44px;
+  }
+  .tones {
+    top: 48px;
+  }
+  .tones button {
+    width: 44px;
+    height: 44px;
+  }
+  .categories {
+    height: 44px;
+  }
+  .categories button,
+  .compact .categories button {
+    flex: 0 0 44px;
+    width: 44px;
+    height: 44px;
+  }
+  .grid,
+  .compact .grid {
+    grid-template-columns: repeat(auto-fit, minmax(44px, 1fr));
+  }
+  .emoji,
+  .compact .emoji {
+    height: 44px;
+    font-size: 28px;
+  }
+}

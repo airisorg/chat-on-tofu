@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import {
   useCallback,
   useEffect,
@@ -27,12 +28,14 @@ import {
   Info,
   Link,
   LogOut,
+  LoaderCircle,
   Menu,
   Mic,
   MessageCircle,
   MessageSquare,
   Pencil,
   Pin,
+  PictureInPicture2,
   Plus,
   Search,
   SendHorizontal,
@@ -54,7 +57,10 @@ import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from "@/lib/media-limits";
 import VoiceRecorder from "./VoiceRecorder";
 import InstallHelp from "./InstallHelp";
 import ContextPopover from "./ContextPopover";
+import LandingDetails from "./LandingDetails";
+import { MaterialHelp, MaterialSettings, MaterialNewChat } from "./MaterialIcons";
 import MediaAttachment from "./MediaAttachment";
+import MiniConversation, { type MiniDraft } from "./MiniConversation";
 import SearchFilters from "./SearchFilters";
 import {
   DEFAULT_SEARCH_FILTERS,
@@ -95,21 +101,9 @@ type Modal =
     }
   | { type: "message" | "edit" | "delete" | "emoji"; message: Message }
   | { type: "attachment"; attachment: Attachment }
+  | { type: "insertEmoji" }
   | null;
-const EMOJI = [
-  "👍",
-  "❤️",
-  "😂",
-  "🎉",
-  "✅",
-  "👀",
-  "🙌",
-  "💡",
-  "🔥",
-  "🙏",
-  "✨",
-  "😊",
-];
+const EmojiPicker = dynamic(() => import("./EmojiPicker"), { ssr: false });
 const names: Record<View, string> = {
   home: "Home",
   direct: "Direct messages",
@@ -260,6 +254,8 @@ function Dialog({
   contextual = false,
   anchor,
   formPopover = false,
+  emojiPopover = false,
+  messagePopover = false,
 }: {
   title: string;
   children: ReactNode;
@@ -268,6 +264,8 @@ function Dialog({
   contextual?: boolean;
   anchor?: HTMLElement | null;
   formPopover?: boolean;
+  emojiPopover?: boolean;
+  messagePopover?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -310,7 +308,8 @@ function Dialog({
         title={title}
         anchor={anchor}
         onClose={onClose}
-        variant={formPopover ? "form" : "menu"}
+        variant={formPopover ? "form" : emojiPopover ? "emoji" : messagePopover ? "message" : "menu"}
+        hideHeader={formPopover || emojiPopover || (messagePopover && !window.matchMedia("(max-width: 767px), (pointer: coarse)").matches)}
       >
         {children}
       </ContextPopover>
@@ -354,6 +353,7 @@ export default function ChatApp() {
   const [pinnedOnly, setPinnedOnly] = useState(false);
   const [threadsOnly, setThreadsOnly] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [shortcutsExpanded, setShortcutsExpanded] = useState(true);
   const [directExpanded, setDirectExpanded] = useState(true);
   const [spacesExpanded, setSpacesExpanded] = useState(true);
   const [compactViewport, setCompactViewport] = useState(false);
@@ -368,7 +368,28 @@ export default function ChatApp() {
   const [draft, setDraft] = useState("");
   const [threadDraft, setThreadDraft] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [miniId, setMiniId] = useState<string | null>(null);
+  const [miniMinimized, setMiniMinimized] = useState(false);
+  const [miniDesktop, setMiniDesktop] = useState(false);
+  const [miniDraft, setMiniDraft] = useState<MiniDraft>({ text: "", attachments: [] });
+  const miniIdRef = useRef<string | null>(null);
+  const miniOwner = useRef<string | null>(null);
+  const miniGeneration = useRef(0);
+  const miniDraftMap = useRef<Record<string, MiniDraft>>({});
+  const miniPending = useRef(new Set<string>());
+  const [miniPendingIds, setMiniPendingIds] = useState<string[]>([]);
+  const expandedMiniDraft = useRef<Record<string, MiniDraft>>({});
+  const mainDraftNow = useRef({ selectedId, text: draft, attachments });
+  mainDraftNow.current = { selectedId, text: draft, attachments };
+  const threadDraftNow = useRef({ selectedId, threadId, text: threadDraft });
+  threadDraftNow.current = { selectedId, threadId, text: threadDraft };
   const [sending, setSending] = useState(false);
+  const [sendFeedback, setSendFeedback] = useState<Record<string, {
+    stage: "sending" | "unconfirmed";
+    text: string;
+    attachments: Attachment[];
+  }>>({});
+  const [draftStorageIssue, setDraftStorageIssue] = useState<"attachments" | "all" | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [theme, setTheme] = useState("system");
@@ -377,7 +398,6 @@ export default function ChatApp() {
   const [landingDeviceLabel, setLandingDeviceLabel] = useState(
     "Works in your browser",
   );
-  const [emojiOpen, setEmojiOpen] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<
     (Event & { prompt: () => Promise<void> }) | null
   >(null);
@@ -396,6 +416,17 @@ export default function ChatApp() {
     window.addEventListener("resize", update);
     return () => window.removeEventListener("resize", update);
   }, []);
+  useEffect(() => {
+    const touch = window.matchMedia("(pointer: coarse)");
+    const update = () => setMiniDesktop(!isCompactViewport() && !touch.matches);
+    update();
+    window.addEventListener("resize", update);
+    touch.addEventListener("change", update);
+    return () => {
+      window.removeEventListener("resize", update);
+      touch.removeEventListener("change", update);
+    };
+  }, []);
   async function installApp() {
     if (!installPrompt) return;
     try {
@@ -412,12 +443,16 @@ export default function ChatApp() {
     Record<string, { text: string; attachments: Attachment[] }>
   >({});
   const threadDraftMap = useRef<Record<string, string>>({});
+  const threadDraftRevision = useRef<Record<string, number>>({});
   const draftOwner = useRef<string | null>(null);
   const [renderedDraftOwner, setRenderedDraftOwner] = useState<string | null>(
     null,
   );
   const state = chat.state;
+  const currentUserNow = useRef<string | null>(null);
+  currentUserNow.current = state?.user.id || null;
   const selected = state?.conversations.find((c) => c.id === selectedId);
+  const miniConversation = state?.conversations.find((c) => c.id === miniId);
   const messages =
     state?.messages.filter(
       (m) => m.conversationId === selectedId && !m.parentId,
@@ -494,8 +529,22 @@ export default function ChatApp() {
     setRenderedDraftOwner(userId);
     draftMap.current = {};
     threadDraftMap.current = {};
+    threadDraftRevision.current = {};
+    miniDraftMap.current = {};
+    miniGeneration.current += 1;
+    miniPending.current.clear();
+    setMiniPendingIds([]);
+    expandedMiniDraft.current = {};
+    miniOwner.current = null;
+    miniIdRef.current = null;
+    setMiniId(null);
+    setMiniMinimized(false);
+    setMiniDraft({ text: "", attachments: [] });
     setDraft("");
     setAttachments([]);
+    setSending(false);
+    setSendFeedback({});
+    setDraftStorageIssue(null);
     setThreadDraft("");
     setThreadId(null);
     setSelectedId(null);
@@ -503,7 +552,6 @@ export default function ChatApp() {
     setSearchScope(null);
     setJumpTarget(null);
     setSearchFilters(DEFAULT_SEARCH_FILTERS);
-    setEmojiOpen(false);
     setModal(null);
     if (userId && state) {
       try {
@@ -545,24 +593,17 @@ export default function ChatApp() {
       }
     }
   }, [state]);
-  useEffect(() => {
-    if (
-      !selectedId ||
-      !state ||
-      draftOwner.current !== state.user.id ||
-      renderedDraftOwner !== state.user.id
-    )
-      return;
-    draftMap.current[selectedId] = { text: draft, attachments };
+  function persistDrafts(owner: string) {
     try {
       localStorage.setItem(
-        `relay-drafts:${state.user.id}`,
+        `relay-drafts:${owner}`,
         JSON.stringify(draftMap.current),
       );
+      setDraftStorageIssue(null);
     } catch {
       try {
         localStorage.setItem(
-          `relay-drafts:${state.user.id}`,
+          `relay-drafts:${owner}`,
           JSON.stringify(
             Object.fromEntries(
               Object.entries(draftMap.current).map(([id, d]) => [
@@ -572,8 +613,26 @@ export default function ChatApp() {
             ),
           ),
         );
-      } catch {}
+        setDraftStorageIssue("attachments");
+      } catch {
+        setDraftStorageIssue("all");
+      }
     }
+  }
+  useEffect(() => {
+    if (
+      !selectedId ||
+      !state ||
+      draftOwner.current !== state.user.id ||
+      renderedDraftOwner !== state.user.id
+    )
+      return;
+    // Keep an unchanged draft's identity across navigation. A new object
+    // records an edit, even if the user later restores the original text.
+    const stored = draftMap.current[selectedId];
+    if (stored?.text !== draft || stored.attachments !== attachments)
+      draftMap.current[selectedId] = { text: draft, attachments };
+    persistDrafts(state.user.id);
   }, [draft, attachments, selectedId, state?.user.id, renderedDraftOwner]);
   useEffect(() => {
     if (threadId) setThreadDraft(threadDraftMap.current[threadId] || "");
@@ -595,7 +654,11 @@ export default function ChatApp() {
   }, [threadDraft, threadId]);
   function updateThreadDraft(text: string) {
     setThreadDraft(text);
-    if (threadId) threadDraftMap.current[threadId] = text;
+    if (threadId) {
+      if (threadDraftMap.current[threadId] !== text)
+        threadDraftRevision.current[threadId] = (threadDraftRevision.current[threadId] || 0) + 1;
+      threadDraftMap.current[threadId] = text;
+    }
   }
   useEffect(() => {
     atBottom.current = true;
@@ -697,13 +760,98 @@ export default function ChatApp() {
     setThreadId(null);
     setDraft(draftMap.current[conversation.id]?.text || "");
     setAttachments(draftMap.current[conversation.id]?.attachments || []);
-    setEmojiOpen(false);
     setQuery("");
     setSearchScope(null);
     setSearchFilters(DEFAULT_SEARCH_FILTERS);
     if (conversation.unread)
       run({ type: "read", conversationId: conversation.id });
   }
+  function closeMini() {
+    miniIdRef.current = null;
+    setMiniId(null);
+    setMiniMinimized(false);
+  }
+  function openMini(conversation: Conversation) {
+    setModal(null);
+    if (!state || draftOwner.current !== state.user.id) return;
+    if (isCompactViewport() || window.matchMedia("(pointer: coarse)").matches) {
+      openConversation(conversation);
+      return;
+    }
+    if (miniId && miniId !== conversation.id) setToast("One pop-up at a time. Drafts stay with each conversation.");
+    miniOwner.current = state.user.id;
+    miniIdRef.current = conversation.id;
+    setMiniId(conversation.id);
+    setMiniMinimized(false);
+    const value = miniDraftMap.current[conversation.id] || { text: "", attachments: [] };
+    miniDraftMap.current[conversation.id] = value;
+    setMiniDraft(value);
+    if (conversation.unread) run({ type: "read", conversationId: conversation.id });
+  }
+  function updateMiniDraft(value: MiniDraft) {
+    if (!state || !miniId || miniOwner.current !== state.user.id) return;
+    miniDraftMap.current[miniId] = value;
+    setMiniDraft(value);
+  }
+  async function sendMini(value: MiniDraft) {
+    if (!state || !miniId || miniOwner.current !== state.user.id) return;
+    const owner = state.user.id;
+    const generation = miniGeneration.current;
+    const conversationId = miniId;
+    if (miniPending.current.has(conversationId)) throw new Error("This message is still sending. Please wait.");
+    miniPending.current.add(conversationId);
+    setMiniPendingIds([...miniPending.current]);
+    try {
+      await act({ type: "send", conversationId, text: value.text.trim(), attachments: value.attachments });
+    } finally {
+      if (currentUserNow.current === owner && draftOwner.current === owner && miniGeneration.current === generation) {
+        miniPending.current.delete(conversationId);
+        setMiniPendingIds([...miniPending.current]);
+      }
+    }
+    // A closed or replaced panel still clears an acknowledged draft, but an
+    // account change or a newly edited draft must never be overwritten.
+    if (currentUserNow.current !== owner || draftOwner.current !== owner || miniGeneration.current !== generation) return;
+    const transferred = expandedMiniDraft.current[conversationId];
+    if (transferred === value) {
+      const current = mainDraftNow.current;
+      const stored = draftMap.current[conversationId];
+      if (stored === value) {
+        draftMap.current[conversationId] = { text: "", attachments: [] };
+        persistDrafts(owner);
+        if (current.selectedId === conversationId && current.text === value.text && current.attachments === value.attachments) { setDraft(""); setAttachments([]); }
+      }
+      delete expandedMiniDraft.current[conversationId];
+    }
+    if (miniDraftMap.current[conversationId] !== value) return;
+    const empty = { text: "", attachments: [] };
+    miniDraftMap.current[conversationId] = empty;
+    if (miniIdRef.current === conversationId) setMiniDraft(empty);
+  }
+  function expandMini() {
+    if (!state || !miniConversation || miniOwner.current !== state.user.id) { closeMini(); return; }
+    if (selectedId) {
+      const stored = draftMap.current[selectedId];
+      if (stored?.text !== draft || stored.attachments !== attachments)
+        draftMap.current[selectedId] = { text: draft, attachments };
+    }
+    const value = miniDraftMap.current[miniConversation.id] || miniDraft;
+    if (value.text || value.attachments.length) {
+      const previous = draftMap.current[miniConversation.id] || { text: "", attachments: [] };
+      draftMap.current[miniConversation.id] = value;
+      if (miniPending.current.has(miniConversation.id)) expandedMiniDraft.current[miniConversation.id] = value;
+      // Preserve a different main-composer draft in this conversation's
+      // pop-up slot, so expanding never discards either draft.
+      miniDraftMap.current[miniConversation.id] = previous;
+      if (previous.text || previous.attachments.length) setToast("Your other draft is saved in this conversation’s pop-up.");
+    }
+    openConversation(miniConversation);
+    closeMini();
+  }
+  useEffect(() => {
+    if (miniId && !miniConversation) closeMini();
+    else if (miniId && !miniDesktop) expandMini();
+  }, [miniId, miniDesktop, miniConversation?.id]);
   function navigate(next: View) {
     setView(next);
     setSelectedId(null);
@@ -718,31 +866,74 @@ export default function ChatApp() {
   async function send(inThread = false) {
     const text = inThread ? threadDraft : draft;
     if (
+      !state ||
       !selected ||
+      draftOwner.current !== state.user.id ||
+      (inThread && !threadId) ||
       sending ||
       (!text.trim() && (!attachments.length || inThread))
     )
       return;
+    const owner = state.user.id;
+    const generation = miniGeneration.current;
+    const conversationId = selected.id;
+    const parentId = inThread ? threadId : null;
+    const revision = parentId ? threadDraftRevision.current[parentId] || 0 : 0;
+    const stored = draftMap.current[conversationId];
+    const sentDraft = stored?.text === text && stored.attachments === attachments
+      ? stored : { text, attachments };
+    if (!inThread) draftMap.current[conversationId] = sentDraft;
+    const stillOwned = () => currentUserNow.current === owner &&
+      draftOwner.current === owner && miniGeneration.current === generation;
+    const feedbackKey = `${conversationId}:${parentId || "main"}`;
+    const sentAttachments = inThread ? [] : attachments;
+    setSendFeedback((previous) => ({ ...previous, [feedbackKey]: {
+      stage: "sending", text, attachments: sentAttachments,
+    } }));
     setSending(true);
     if (inThread) threadAtBottom.current = true;
     else atBottom.current = true;
     try {
       await act({
         type: "send",
-        conversationId: selected.id,
+        conversationId,
         text: text.trim(),
-        ...(inThread && threadId ? { parentId: threadId } : {}),
+        ...(parentId ? { parentId } : {}),
         attachments: inThread ? [] : attachments,
       });
-      if (inThread) updateThreadDraft("");
-      else {
-        setDraft("");
-        setAttachments([]);
+      if (!stillOwned()) return;
+      setSendFeedback((previous) => {
+        const next = { ...previous };
+        delete next[feedbackKey];
+        return next;
+      });
+      if (parentId) {
+        const current = threadDraftNow.current;
+        if ((threadDraftRevision.current[parentId] || 0) === revision && threadDraftMap.current[parentId] === text) {
+          threadDraftMap.current[parentId] = "";
+          threadDraftRevision.current[parentId] = revision + 1;
+          if (current.selectedId === conversationId && current.threadId === parentId && current.text === text) {
+            setThreadDraft("");
+            threadComposerRef.current?.focus();
+          }
+        }
+      } else if (draftMap.current[conversationId] === sentDraft) {
+        const current = mainDraftNow.current;
+        draftMap.current[conversationId] = { text: "", attachments: [] };
+        // Persist the acknowledged conversation even when another one is open.
+        persistDrafts(owner);
+        if (current.selectedId === conversationId && current.text === text && current.attachments === attachments) {
+          setDraft("");
+          setAttachments([]);
+          composerRef.current?.focus();
+        }
       }
-      (inThread ? threadComposerRef.current : composerRef.current)?.focus();
     } catch {
+      if (stillOwned()) setSendFeedback((previous) => ({ ...previous, [feedbackKey]: {
+        stage: "unconfirmed", text, attachments: sentAttachments,
+      } }));
     } finally {
-      setSending(false);
+      if (stillOwned()) setSending(false);
     }
   }
   function composeKey(
@@ -917,12 +1108,12 @@ export default function ChatApp() {
   function showMessage(message: Message) {
     setModal({ type: "message", message });
   }
-  function messageRow(message: Message, compact = false) {
+  function messageRow(message: Message, compact = false, idPrefix = "") {
     const count =
       state?.messages.filter((m) => m.parentId === message.id).length || 0;
     return (
       <article
-        id={`message-${message.id}`}
+        id={`${idPrefix}message-${message.id}`}
         className={`message ${jumpTarget === message.id ? "message-highlight" : ""} ${compact ? "compact-message" : ""}`}
         key={message.id}
       >
@@ -994,12 +1185,16 @@ export default function ChatApp() {
         </div>
         {!message.deleted && (
           <div className="message-actions">
+            <div className="quick-reactions" aria-label="Quick reactions">
+              {["👍", "😂", "🙏"].map(emoji => <button key={emoji} type="button" aria-label={`React ${emoji}`} onClick={() => run({type:"react", messageId:message.id, emoji})}>{emoji}</button>)}
+            </div>
             <IconButton
               label="Add reaction"
               onClick={() => setModal({ type: "emoji", message })}
             >
               <Smile size={18} />
             </IconButton>
+            {message.author.id === state!.user.id && <IconButton label="Edit message" onClick={() => setModal({type:"edit", message})}><Pencil size={18}/></IconButton>}
             {!compact && (
               <IconButton
                 label="Reply in thread"
@@ -1029,7 +1224,7 @@ export default function ChatApp() {
     <>
       {toast && (
         <div className="toast" role="status">
-          <Check size={18} />
+          <Info size={18} aria-hidden="true" />
           <span>{toast}</span>
           <IconButton label="Dismiss notification" onClick={() => setToast("")}>
             <X size={18} />
@@ -1210,6 +1405,7 @@ export default function ChatApp() {
             </span>
           </div>
         </section>
+        <LandingDetails />
         <footer className="welcome-footer">
           Your conversations are private to this app.
         </footer>
@@ -1307,6 +1503,33 @@ export default function ChatApp() {
     { view: "mentions", icon: <AtSign size={20} />, label: "Mentions" },
     { view: "starred", icon: <Star size={20} />, label: "Starred" },
   ];
+  function composerStatus(inThread: boolean) {
+    const feedback = sendFeedback[`${selectedId}:${inThread ? threadId : "main"}`];
+    const currentText = inThread ? threadDraft : draft;
+    const unchanged = feedback && currentText === feedback.text &&
+      (inThread || attachments === feedback.attachments);
+    const status = feedback?.stage === "sending"
+      ? "Sending… Waiting for confirmation."
+      : feedback?.stage === "unconfirmed"
+        ? unchanged
+          ? "Send not confirmed. Your draft is kept here. Press Send to retry."
+          : "Previous send not confirmed. Your current draft is kept here."
+        : sending
+          ? "Another message is waiting for confirmation."
+          : chat.offline
+            ? "You may be offline. Your draft is kept here. You can try sending."
+            : "";
+    const storageNote = !inThread && draftStorageIssue && (draftStorageIssue === "all" || attachments.length)
+      ? draftStorageIssue === "all"
+        ? "Keep this page open until sending is confirmed. This draft could not be saved for a reload."
+        : "Attachments stay in this open page. Reloading may require adding them again."
+      : "";
+    if (!status && !storageNote) return null;
+    return <div className={`composer-status ${feedback?.stage === "unconfirmed" ? "unconfirmed" : ""}`} role="status" aria-live="polite">
+      {status && <p>{status}</p>}
+      {storageNote && <p>{storageNote}</p>}
+    </div>;
+  }
   const composer = (inThread = false) => (
     <div className={`composer-wrap ${inThread ? "thread-composer-wrap" : ""}`}>
       {!inThread && attachments.length > 0 && (
@@ -1339,7 +1562,7 @@ export default function ChatApp() {
           ))}
         </div>
       )}
-      <div className="composer">
+      <div className="composer" aria-busy={sending}>
         <textarea
           ref={inThread ? threadComposerRef : composerRef}
           value={inThread ? threadDraft : draft}
@@ -1361,8 +1584,8 @@ export default function ChatApp() {
             <>
               <IconButton
                 label="Add emoji"
-                className={emojiOpen ? "active" : ""}
-                onClick={() => setEmojiOpen(!emojiOpen)}
+                className={modal?.type === "insertEmoji" ? "active" : ""}
+                onClick={() => setModal({ type: "insertEmoji" })}
               >
                 <Smile size={22} />
               </IconButton>
@@ -1384,7 +1607,8 @@ export default function ChatApp() {
             type="button"
             className="send-button"
             aria-label={inThread ? "Send reply" : "Send message"}
-            title="Send message"
+            aria-busy={sending}
+            title={sending ? "Waiting for send confirmation" : inThread ? "Send reply" : "Send message"}
             disabled={
               sending ||
               !(inThread
@@ -1393,27 +1617,11 @@ export default function ChatApp() {
             }
             onClick={() => void send(inThread)}
           >
-            <SendHorizontal size={22} />
+            {sending ? <LoaderCircle className="send-spinner" size={22} aria-hidden="true" /> : <SendHorizontal size={22} aria-hidden="true" />}
           </button>
         </div>
       </div>
-      {!inThread && emojiOpen && (
-        <div className="composer-emoji">
-          {EMOJI.map((emoji) => (
-            <button
-              key={emoji}
-              aria-label={`Insert ${emoji}`}
-              onClick={() => {
-                setDraft(draft + emoji);
-                setEmojiOpen(false);
-                composerRef.current?.focus();
-              }}
-            >
-              {emoji}
-            </button>
-          ))}
-        </div>
-      )}
+      {composerStatus(inThread)}
       {!inThread && (
         <input
           type="file"
@@ -1538,13 +1746,13 @@ export default function ChatApp() {
             label="Help and installation"
             onClick={() => setModal({ type: "support" })}
           >
-            <CircleHelp size={23} />
+            <MaterialHelp />
           </IconButton>
           <IconButton
             label="Settings"
             onClick={() => setModal({ type: "settings" })}
           >
-            <Settings size={23} />
+            <MaterialSettings />
           </IconButton>
           <button
             className="account-button"
@@ -1564,10 +1772,20 @@ export default function ChatApp() {
           className="new-chat-button"
           onClick={() => setModal({ type: "new", kind: "dm" })}
         >
-          <Plus size={25} />
+          <MaterialNewChat />
           New chat
         </button>
         <nav>
+          <button
+            className="sidebar-shortcuts-heading"
+            aria-expanded={shortcutsExpanded}
+            aria-controls="shortcut-navigation-items"
+            onClick={() => setShortcutsExpanded((value) => !value)}
+          >
+            {shortcutsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <span>Shortcuts</span>
+          </button>
+          <div id="shortcut-navigation-items" hidden={!shortcutsExpanded && !sidebarCollapsed}>
           {navItems.map((item) => (
             <button
               key={item.view}
@@ -1580,6 +1798,7 @@ export default function ChatApp() {
               {!!item.count && <span className="nav-count">{item.count}</span>}
             </button>
           ))}
+          </div>
         </nav>
         <div className="sidebar-group">
           <div className="sidebar-group-heading">
@@ -1702,10 +1921,10 @@ export default function ChatApp() {
               className={`connection-dot ${chat.offline ? "offline" : ""}`}
             />
             {chat.offline
-              ? "Offline · saved on this device"
+              ? "May be offline"
               : chat.demo
-                ? "Changes saved on this device"
-                : "Connected"}
+                ? "Local preview"
+                : "Signed in"}
           </span>
         </div>
       </aside>
@@ -1746,6 +1965,9 @@ export default function ChatApp() {
                 </small>
               </button>
               <div className="conversation-header-actions">
+                {miniDesktop && <IconButton label="Open in a pop-up" onClick={() => openMini(selected)}>
+                  <PictureInPicture2 size={22} />
+                </IconButton>}
                 <a
                   className="icon-button"
                   aria-label="Open Google Meet"
@@ -2271,15 +2493,35 @@ export default function ChatApp() {
           <Pencil size={23} />
         </button>
       )}
+      {miniConversation && miniOwner.current === state.user.id && <MiniConversation
+        key={`${state.user.id}:${miniConversation.id}`}
+        conversation={miniConversation}
+        messages={state.messages.filter(message => message.conversationId === miniConversation.id && !message.parentId)}
+        draft={miniDraft}
+        minimized={miniMinimized}
+        avatar={<ConversationAvatar small userId={state.user.id} conversation={miniConversation} />}
+        offline={chat.offline}
+        pending={miniPendingIds.includes(miniConversation.id)}
+        currentUserId={state.user.id}
+        renderMessage={message => messageRow(message, true, "mini-")}
+        onDraft={updateMiniDraft}
+        onSend={sendMini}
+        onMinimize={() => setMiniMinimized(true)}
+        onRestore={() => { setMiniMinimized(false); if (miniConversation.unread) run({ type: "read", conversationId: miniConversation.id }); }}
+        onExpand={expandMini}
+        onClose={closeMini}
+      />}
       {toastUI}
 
       {modal && (
         <Dialog
           contextual={
-            ["message", "emoji", "status", "support"].includes(modal.type) ||
+            ["message", "emoji", "insertEmoji", "status", "support"].includes(modal.type) ||
             (modal.type === "new" && !compactViewport)
           }
           formPopover={modal.type === "new"}
+          emojiPopover={modal.type === "emoji" || modal.type === "insertEmoji"}
+          messagePopover={modal.type === "message"}
           anchor={menuAnchor.current}
           title={
             modal.type === "status"
@@ -2314,7 +2556,9 @@ export default function ChatApp() {
                                           ? "Edit message"
                                           : modal.type === "delete"
                                             ? "Delete this message?"
-                                            : modal.type === "emoji"
+                                            : modal.type === "insertEmoji"
+                                              ? "Add emoji"
+                                              : modal.type === "emoji"
                                               ? "Add a reaction"
                                               : "Message actions"
           }
@@ -2387,7 +2631,7 @@ export default function ChatApp() {
               </p>
               <p>
                 <strong>Share more than text</strong>Attach images and files up
-                to 5 MB each, or record a voice message up to 60 seconds. Listen
+                to 5 MB each, or record a voice message up to 2 minutes. Listen
                 before sending.
               </p>
               <p>
@@ -2441,6 +2685,7 @@ export default function ChatApp() {
           {modal.type === "new" && (
             <NewConversationForm
               kind={modal.kind}
+              compact={compactViewport}
               currentEmail={state.user.email}
               people={state.conversations
                 .flatMap((conversation) => conversation.members)
@@ -2651,6 +2896,10 @@ export default function ChatApp() {
                 </p>
               </div>
               <div className="menu-list">
+                <button onClick={() => openMini(modal.conversation)}>
+                  <PictureInPicture2 size={20} />
+                  Open in a pop-up
+                </button>
                 <button
                   onClick={() =>
                     setModal({
@@ -3029,20 +3278,24 @@ export default function ChatApp() {
             </div>
           )}
           {modal.type === "emoji" && (
-            <div className="emoji-grid">
-              {EMOJI.map((emoji) => (
-                <button
-                  key={emoji}
-                  aria-label={`React ${emoji}`}
-                  onClick={() => {
-                    run({ type: "react", messageId: modal.message.id, emoji });
-                    setModal(null);
-                  }}
-                >
-                  {emoji}
-                </button>
-              ))}
-            </div>
+            <EmojiPicker currentUserId={state.user.id} onSelect={(emoji) => {
+              run({ type: "react", messageId: modal.message.id, emoji });
+              setModal(null);
+            }} />
+          )}
+          {modal.type === "insertEmoji" && (
+            <EmojiPicker currentUserId={state.user.id} selectionLabelPrefix="Insert" onSelect={(emoji) => {
+              const composer = composerRef.current;
+              const start = composer?.selectionStart ?? draft.length;
+              const end = composer?.selectionEnd ?? start;
+              if (draft.length - (end - start) + emoji.length > 6000) {
+                setToast("Messages can contain up to 6,000 characters.");
+                return;
+              }
+              setDraft(draft.slice(0, start) + emoji + draft.slice(end));
+              setModal(null);
+              requestAnimationFrame(() => { composer?.focus(); composer?.setSelectionRange(start + emoji.length, start + emoji.length); });
+            }} />
           )}
           {modal.type === "edit" && (
             <form

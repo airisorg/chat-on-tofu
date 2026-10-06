@@ -2,13 +2,156 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import type { User } from '@supabase/supabase-js';
-import { applySchema, getChat, mutateChat, getAttachment, attachmentResponse, ChatError, stageUpload, type UploadChunk } from '../src/lib/server';
+import type { ChatAction } from '../src/lib/types';
+import { applySchema, getChat, getChatResult, mutateChat, getAttachment, attachmentResponse, ChatError, stageUpload, type UploadChunk } from '../src/lib/server';
+import { ACTION_RETRY_WINDOW_MS, MAX_RECENT_ACTIONS } from '../src/lib/action-identity';
+import { MAX_CONVERSATION_MEMBERS } from '../src/lib/chat-limits';
 import { MAX_ATTACHMENT_BYTES, MAX_HISTORY_PAYLOAD_BYTES, MAX_UPLOAD_BODY_BYTES, UPLOAD_CHUNK_BYTES } from '../src/lib/media-limits';
 
 import { sqlAdapter } from './helpers/pglite-sql';
 function user(id: string, email: string, name: string): User {
   return { id, email, email_confirmed_at: '2026-10-05T00:00:00Z', aud: 'authenticated', app_metadata: {}, user_metadata: { full_name: name }, created_at: '2026-10-05T00:00:00Z' };
 }
+
+test('thirty total slots include pending invitations, bulk mixed recipients and concurrent additions', async () => {
+  const pg=new PGlite(),sql=sqlAdapter(pg,callback=>pg.transaction(tx=>callback(tx)));
+  const users=Array.from({length:MAX_CONVERSATION_MEMBERS},(_,index)=>user(crypto.randomUUID(),`member-${index}@cap-test.invalid`,`Member ${index}`));
+  try{
+    await applySchema(sql);for(const person of users)await getChat(person,sql);
+    const owner=users[0],peer=users[1];
+    const maximum=(await mutateChat(owner,{type:'create',kind:'group',name:'Thirty',emails:users.slice(1).map(person=>person.email)},sql)).id!;
+    assert.equal((await getChat(owner,sql)).conversations.find(c=>c.id===maximum)!.members.length,MAX_CONVERSATION_MEMBERS);
+    const count=(await pg.query('select * from relay.conversations')).rows.length;
+    await assert.rejects(mutateChat(owner,{type:'create',kind:'group',name:'Too many',emails:[...users.slice(1).map(person=>person.email),'extra@cap-test.invalid']},sql),/up to 30 people/);
+    assert.equal((await pg.query('select * from relay.conversations')).rows.length,count,'oversized creation fully rolls back');
+    await mutateChat(owner,{type:'invite',conversationId:maximum,emails:[peer.email!,peer.email!]},sql);
+    assert.equal((await getChat(owner,sql)).conversations.find(c=>c.id===maximum)!.members.length,MAX_CONVERSATION_MEMBERS,'duplicate invitations consume no extra slot');
+    const pending=Array.from({length:27},(_,index)=>`pending-${index}@cap-test.invalid`);
+    const mixed=(await mutateChat(owner,{type:'create',kind:'space',name:'Mixed',emails:[peer.email!,...pending]},sql)).id!;
+    assert.equal((await getChat(owner,sql)).conversations.find(c=>c.id===mixed)!.members.length,29);
+    assert.equal((await pg.query('select * from relay.invites where conversation_id=$1',[mixed])).rows.length,27,'mixed known and unknown emails are both inserted');
+    const raced=await Promise.allSettled([
+      mutateChat(owner,{type:'invite',conversationId:mixed,emails:['final-a@cap-test.invalid']},sql),
+      mutateChat(peer,{type:'invite',conversationId:mixed,emails:['final-b@cap-test.invalid']},sql),
+    ]);
+    assert.equal(raced.filter(result=>result.status==='fulfilled').length,1);
+    assert.equal(raced.filter(result=>result.status==='rejected').length,1);
+    const before=(await getChat(owner,sql)).conversations.find(c=>c.id===mixed)!;assert.equal(before.members.length,30);
+    const claimed=user(crypto.randomUUID(),pending[0],'Claimed invitation');await getChat(claimed,sql);
+    const after=(await getChat(owner,sql)).conversations.find(c=>c.id===mixed)!;assert.equal(after.members.length,30);assert.equal(after.members.find(person=>person.email===pending[0])!.id,claimed.id);
+    await assert.rejects(mutateChat(owner,{type:'invite',conversationId:mixed,emails:['overflow@cap-test.invalid']},sql),/up to 30 people/);
+  }finally{await pg.close();}
+});
+
+test('metadata migration preserves legacy binary data and history queries avoid the binary column', async () => {
+  const pg=new PGlite();const observed:string[]=[];
+  const observe=(engine:{query:typeof pg.query})=>({query:async(query:string,parameters?:unknown[])=>{observed.push(query);return engine.query(query,parameters);}});
+  const sql=sqlAdapter(observe(pg),callback=>pg.transaction(tx=>callback(observe(tx))));
+  const alice=user(crypto.randomUUID(),'metadata@test.invalid','Alice'),bob=user(crypto.randomUUID(),'member@test.invalid','Bob');
+  try{
+    await applySchema(sql);await getChat(alice,sql);
+    const conversationId=(await mutateChat(alice,{type:'create',kind:'group',name:'Metadata',emails:[bob.email]},sql)).id!;await getChat(bob,sql);
+    const bytes=Buffer.from([137,80,78,71,13,10,26,10,1]);
+    const saved=await mutateChat(alice,{type:'send',conversationId,text:'Legacy',attachments:[{name:'legacy.png',type:'image/png',size:bytes.length,url:`data:image/png;base64,${bytes.toString('base64')}`}]},sql);
+    await pg.exec('ALTER TABLE relay.messages DROP COLUMN attachment_metadata; DELETE FROM relay.schema_migrations WHERE version=5; INSERT INTO relay.schema_migrations(version) VALUES(4) ON CONFLICT DO NOTHING;');
+    await applySchema(sql);observed.length=0;
+    const state=await getChat(bob,sql);assert.equal(state.messages[0].attachments[0].url,`/api/attachments?messageId=${saved.id}&index=0`);
+    const metadata=(await pg.query<{attachment_metadata:unknown[]}>('select attachment_metadata from relay.messages where id=$1',[saved.id])).rows[0].attachment_metadata;
+    assert.deepEqual(metadata,[{name:'legacy.png',type:'image/png',size:bytes.length}]);
+    const history=observed.find(query=>/with selected as materialized/.test(query))!;assert.ok(history);assert.match(history,/cross join lateral/);assert.doesNotMatch(history,/jsonb_array_elements\(m\.attachments\)/);
+    assert.deepEqual((await getAttachment(bob,saved.id,0,sql)).bytes,bytes);
+    await mutateChat(alice,{type:'delete',messageId:saved.id},sql);
+    assert.deepEqual((await pg.query<{attachment_metadata:unknown[]}>('select attachment_metadata from relay.messages where id=$1',[saved.id])).rows[0].attachment_metadata,[]);
+  }finally{await pg.close();}
+});
+
+test('atomic receipts make every non-send mutation safe after lost acknowledgement without extra events', async () => {
+  const pg = new PGlite(), sql = sqlAdapter(pg, callback => pg.transaction(tx => callback(tx)));
+  const alice = user('11111111-1111-4111-8111-111111111111', 'alice@example.com', 'Alice');
+  const bob = user('22222222-2222-4222-8222-222222222222', 'bob@example.com', 'Bob');
+  const outsider = user('33333333-3333-4333-8333-333333333333', 'outsider@example.com', 'Outsider');
+  try {
+    await applySchema(sql); await getChat(alice, sql);
+    const once = async (action: Exclude<ChatAction, {type:'send'}>) => {
+      const input = { ...action, clientActionId:crypto.randomUUID(), clientActionCreatedAt:new Date().toISOString() };
+      const first = await mutateChat(alice, input, sql);
+      const count = (await pg.query('select * from relay.events')).rows.length;
+      const retry = await mutateChat(alice, input, sql);
+      assert.equal(retry.actionId, input.clientActionId); assert.equal(retry.id, first.id);
+      assert.equal((await pg.query('select * from relay.events')).rows.length, count, `${action.type} replay emits no extra events`);
+      const confirmed = await getChatResult(alice, input.clientActionId, sql);
+      assert.equal(confirmed.actionId, input.clientActionId); assert.equal(confirmed.id, first.id);
+      return { input, first, retry };
+    };
+    const created = await once({type:'create',kind:'space',name:'One space',emails:[bob.email!]});
+    const conversationId = created.first.id!;
+    assert.equal((await pg.query('select * from relay.conversations')).rows.length, 1);
+    await getChat(bob, sql); await getChat(outsider, sql);
+    const messageId = (await mutateChat(alice, {type:'send',conversationId,text:'Original'}, sql)).id!;
+    const reaction = await once({type:'react',messageId,emoji:'👍'});
+    assert.deepEqual(reaction.retry.state.messages[0].reactions,[{emoji:'👍',userIds:[alice.id]}]);
+    const star = await once({type:'star',messageId}); assert.equal(star.retry.state.messages[0].starred,true);
+    const removedStar = await once({type:'star',messageId,starred:false}); assert.equal(removedStar.retry.state.messages[0].starred,false);
+    await once({type:'star',messageId,starred:true});
+    const removedReaction = await once({type:'react',messageId,emoji:'👍',active:false}); assert.deepEqual(removedReaction.retry.state.messages[0].reactions,[]);
+    await once({type:'react',messageId,emoji:'👍',active:true});
+    const unread = await once({type:'read',conversationId,unread:true}); assert.equal(unread.retry.state.conversations[0].unread,1);
+    await once({type:'read',conversationId,unread:false});
+    const changed = await once({type:'conversation',conversationId,name:'Revised',description:'Description',pinned:true,muted:true,section:'Friends'});
+    assert.equal(changed.retry.state.conversations[0].name,'Revised');
+    assert.equal(changed.retry.state.conversations[0].pinned,true); assert.equal(changed.retry.state.conversations[0].muted,true); assert.equal(changed.retry.state.conversations[0].section,'Friends');
+    await once({type:'invite',conversationId,emails:['new-invite@example.com']});
+    assert.equal((await pg.query("select * from relay.invites where email='new-invite@example.com'")).rows.length,1);
+    const profile = await once({type:'profile',name:'New Alice',status:'Away'}); assert.equal(profile.retry.state.user.status,'Away');
+    const edit = await once({type:'edit',messageId,text:'Edited once'}); assert.equal(edit.retry.state.messages[0].text,'Edited once');
+    const deleted = await once({type:'delete',messageId}); assert.equal(deleted.retry.state.messages[0].deleted,true);
+    await assert.rejects(mutateChat(outsider,star.input,sql),(error:unknown)=>error instanceof ChatError && error.status===409);
+    await assert.rejects(mutateChat(alice,{...star.input,type:'profile',status:'Different intent'},sql),(error:unknown)=>error instanceof ChatError && error.status===409);
+    const privateReceipt = await getChatResult(outsider,created.input.clientActionId,sql); assert.equal(privateReceipt.actionId,undefined);
+    const leave = await once({type:'leave',conversationId}); assert.deepEqual(leave.retry.state.conversations,[]);
+    const revoked = await mutateChat(alice,created.input,sql); assert.deepEqual(revoked.state.conversations,[]); assert.deepEqual(revoked.state.messages,[]);
+    assert.equal((await pg.query('select * from relay.conversations')).rows.length,1,'replay after revoked membership never creates or restores access');
+    await assert.rejects(mutateChat(alice,{type:'react',messageId,emoji:'👍',clientActionId:crypto.randomUUID(),clientActionCreatedAt:new Date().toISOString()},sql),(error:unknown)=>error instanceof ChatError && error.status===404);
+  } finally { await pg.close(); }
+});
+
+test('receipt transaction rollback, expiry and quota preserve unexpired retry identities', async () => {
+  const pg = new PGlite(), sql = sqlAdapter(pg, callback => pg.transaction(tx => callback(tx)));
+  const alice = user('11111111-1111-4111-8111-111111111111', 'alice@example.com', 'Alice');
+  try {
+    await applySchema(sql); await getChat(alice,sql);
+    const invalidId=crypto.randomUUID();
+    await assert.rejects(mutateChat(alice,{type:'profile',name:'x'.repeat(81),clientActionId:invalidId,clientActionCreatedAt:new Date().toISOString()},sql),/1 and 80/);
+    assert.equal((await pg.query('select * from relay.operations where id=$1',[invalidId])).rows.length,0,'failed validation rolls back mutation and receipt');
+    assert.equal((await getChat(alice,sql)).user.name,'Alice');
+    const retained={type:'profile',status:'Retained intent',clientActionId:crypto.randomUUID(),clientActionCreatedAt:new Date().toISOString()};
+    await mutateChat(alice,retained,sql);
+    await pg.query("insert into relay.operations(id,owner_id,digest,expires_at) select gen_random_uuid(),$1,repeat('a',64),now()+interval '1 day' from generate_series(1,$2)",[alice.id,MAX_RECENT_ACTIONS-1]);
+    await assert.rejects(mutateChat(alice,{type:'profile',status:'New intent',clientActionId:crypto.randomUUID(),clientActionCreatedAt:new Date().toISOString()},sql),(error:unknown)=>error instanceof ChatError && error.status===429);
+    assert.equal((await pg.query('select * from relay.operations where id=$1',[retained.clientActionId])).rows.length,1);
+    assert.equal((await mutateChat(alice,retained,sql)).actionId,retained.clientActionId,'existing retry works even at capacity');
+    await pg.query("update relay.operations set expires_at=now()-interval '1 second' where id<>$1",[retained.clientActionId]);
+    await mutateChat(alice,{type:'profile',status:'After cleanup',clientActionId:crypto.randomUUID(),clientActionCreatedAt:new Date().toISOString()},sql);
+    assert.equal((await pg.query('select * from relay.operations where id=$1',[retained.clientActionId])).rows.length,1,'expired cleanup never evicts an unexpired receipt');
+    await assert.rejects(mutateChat(alice,{type:'profile',status:'Too old',clientActionId:crypto.randomUUID(),clientActionCreatedAt:new Date(Date.now()-ACTION_RETRY_WINDOW_MS-1).toISOString()},sql),(error:unknown)=>error instanceof ChatError && error.status===409);
+    assert.equal((await getChat(alice,sql)).user.status,'After cleanup');
+  } finally { await pg.close(); }
+});
+
+test('schema upgrade preserves data and keeps operation receipts unavailable to browser roles', async () => {
+  const pg = new PGlite(), sql = sqlAdapter(pg, callback => pg.transaction(tx => callback(tx)));
+  const alice = user('11111111-1111-4111-8111-111111111111', 'alice@example.com', 'Alice');
+  try {
+    await pg.exec('CREATE ROLE anon; CREATE ROLE authenticated;');
+    await applySchema(sql); await getChat(alice,sql);
+    await pg.exec('DROP TABLE relay.operations; DELETE FROM relay.schema_migrations; INSERT INTO relay.schema_migrations(version) VALUES(3);');
+    await applySchema(sql); await applySchema(sql);
+    assert.equal((await getChat(alice,sql)).user.name,'Alice');
+    assert.equal((await pg.query('select * from relay.schema_migrations where version=5')).rows.length,1);
+    const schema=await pg.query<{relrowsecurity:boolean}>("select relrowsecurity from pg_class where oid='relay.operations'::regclass"); assert.equal(schema.rows[0].relrowsecurity,true);
+    for(const role of ['anon','authenticated']) { await pg.exec(`SET ROLE ${role}`); await assert.rejects(pg.query('select * from relay.operations'),/permission denied/); await pg.exec('RESET ROLE'); }
+  } finally { await pg.close(); }
+});
 
 test('real PostgreSQL schema and two-account chat preserve membership and per-user isolation', async () => {
   const pg = new PGlite();
@@ -27,7 +170,7 @@ test('real PostgreSQL schema and two-account chat preserve membership and per-us
     assert.equal(observed.length, 3, 'installed schema requires only advisory lock and two metadata reads');
     assert.equal(observed.some(query => /CREATE|ALTER|REVOKE/i.test(query)), false);
     assert.equal((await pg.query('select version from relay.schema_migrations')).rows.length, 1);
-    assert.equal((await pg.query<{ version: number }>('select version from relay.schema_migrations')).rows[0].version, 3);
+    assert.equal((await pg.query<{ version: number }>('select version from relay.schema_migrations')).rows[0].version, 5);
     assert.equal((await pg.query("select * from pg_publication_tables where pubname='supabase_realtime' and schemaname='relay' and tablename='events'")).rows.length, 1);
     assert.deepEqual((await getChat(alice, sql)).conversations, []);
     const created = await mutateChat(alice, { type: 'create', name: 'Bob', kind: 'dm', emails: ['BOB@example.com'] }, sql);
@@ -48,6 +191,8 @@ test('real PostgreSQL schema and two-account chat preserve membership and per-us
     const bobState = await getChat(bob, sql);
     assert.equal(bobState.messages[0].text, 'Hello Bob');
     assert.equal(bobState.messages[0].attachments.length, 2);
+    assert.deepEqual((await getAttachment(bob,messageId,0,sql)).bytes,png);
+    assert.deepEqual((await getAttachment(bob,messageId,1,sql)).bytes,voice);
     assert.equal(bobState.conversations[0].unread, 1);
     const events = await pg.query<{ user_id: string; conversation_id: string }>('select * from relay.events');
     assert.equal(events.rows.some(row => row.user_id === alice.id && row.conversation_id === conversationId), true);
@@ -69,6 +214,14 @@ test('real PostgreSQL schema and two-account chat preserve membership and per-us
     await assert.rejects(mutateChat(bob, { type: 'delete', messageId }, sql), (e: unknown) => e instanceof ChatError && e.status === 403);
     const reacted = await mutateChat(bob, { type: 'react', messageId, emoji: '👍' }, sql);
     assert.deepEqual(reacted.state.messages[0].reactions, [{ emoji: '👍', userIds: [bob.id] }]);
+    for (const emoji of ['🇬🇷', '1️⃣', '👩🏽‍💻']) {
+      const native = await mutateChat(bob, { type: 'react', messageId, emoji }, sql);
+      assert.equal(native.state.messages[0].reactions.some(reaction => reaction.emoji === emoji && reaction.userIds.includes(bob.id)), true);
+      const toggled = await mutateChat(bob, { type: 'react', messageId, emoji }, sql);
+      assert.equal(toggled.state.messages[0].reactions.some(reaction => reaction.emoji === emoji), false);
+    }
+    for (const emoji of ['👍 ready', '👍👍', '🇬', '👍\n'])
+      await assert.rejects(mutateChat(bob, { type: 'react', messageId, emoji }, sql), (error: unknown) => error instanceof ChatError && error.status === 400);
     await mutateChat(bob, { type: 'star', messageId }, sql);
     assert.equal((await getChat(bob, sql)).messages[0].starred, true);
     assert.equal((await getChat(alice, sql)).messages[0].starred, false);
@@ -222,7 +375,7 @@ test('staging reservations stay bounded and migration upgrades preserve existing
     await pg.exec('DROP TABLE relay.uploads; DELETE FROM relay.schema_migrations; INSERT INTO relay.schema_migrations(version) VALUES(2);');
     await applySchema(sql); await applySchema(sql);
     assert.equal((await getChat(alice, sql)).messages[0].id, saved.id);
-    assert.deepEqual((await pg.query<{ version: number }>('select version from relay.schema_migrations order by version')).rows.map(row => row.version), [2, 3]);
+    assert.deepEqual((await pg.query<{ version: number }>('select version from relay.schema_migrations order by version')).rows.map(row => row.version), [2, 5]);
     const bytes = Buffer.alloc(MAX_ATTACHMENT_BYTES); Buffer.from([137,80,78,71,13,10,26,10]).copy(bytes);
     for (let index = 0; index < 4; index++) await stageUpload(alice, uploadChunks(crypto.randomUUID(), conversationId, bytes)[0], sql);
     await assert.rejects(stageUpload(alice, uploadChunks(crypto.randomUUID(), conversationId, bytes)[0], sql), (e: unknown) => e instanceof ChatError && e.status === 429);

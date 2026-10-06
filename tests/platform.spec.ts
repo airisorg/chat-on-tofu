@@ -13,30 +13,63 @@ import { deflateSync } from "node:zlib";
 // installed Safari testing. UA/standalone/visualViewport mocks exercise real UI
 // branches without visiting production or requesting OAuth/microphone access.
 const main = (page: Page) => page.getByRole("main");
-test("phone actions retain usable touch targets", async ({ browser, baseURL }) => {
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, serviceWorkers: "block" });
+test("phone actions retain usable touch targets", async ({
+  browser,
+  baseURL,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+    serviceWorkers: "block",
+  });
   try {
     const page = await context.newPage();
-    await page.route("**/api/config", route => route.fulfill({ json: { supabaseUrl: "", supabaseAnonKey: "", databaseConfigured: false } }));
+    await page.route("**/api/config", (route) =>
+      route.fulfill({
+        json: {
+          supabaseUrl: "",
+          supabaseAnonKey: "",
+          databaseConfigured: false,
+        },
+      }),
+    );
     await page.goto(baseURL!);
-    await page.getByRole("button", { name: "Explore demo", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Explore demo", exact: true })
+      .click();
     await page.locator(".app-shell").waitFor();
-    expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
-    const all = main(page).locator(".home-filter-tabs").getByRole("button", { name: "All", exact: true });
+    expect(
+      await page.evaluate(() => matchMedia("(pointer: coarse)").matches),
+    ).toBe(true);
+    const all = main(page)
+      .locator(".home-filter-tabs")
+      .getByRole("button", { name: "All", exact: true });
     await expect(all).toBeVisible();
     const allBox = await all.boundingBox();
-    expect(allBox!.width).toBeGreaterThanOrEqual(44); expect(allBox!.height).toBeGreaterThanOrEqual(44);
+    expect(allBox!.width).toBeGreaterThanOrEqual(44);
+    expect(allBox!.height).toBeGreaterThanOrEqual(44);
     await openDesign(page, true);
-    const addPeople = main(page).locator(".conversation-intro").getByRole("button", { name: "Add people", exact: true });
+    const addPeople = main(page)
+      .locator(".conversation-intro")
+      .getByRole("button", { name: "Add people", exact: true });
     await expect(addPeople).toBeVisible();
     const addBox = await addPeople.boundingBox();
-    expect(addBox!.width).toBeGreaterThanOrEqual(44); expect(addBox!.height).toBeGreaterThanOrEqual(44);
+    expect(addBox!.width).toBeGreaterThanOrEqual(44);
+    expect(addBox!.height).toBeGreaterThanOrEqual(44);
     await addPeople.click();
-    const invitation = page.getByRole("dialog", { name: "Add people", exact: true });
+    const invitation = page.getByRole("dialog", {
+      name: "Add people",
+      exact: true,
+    });
     await expect(invitation).toBeVisible();
-    await expect(invitation.getByRole("textbox", { name: /Email/ })).toBeVisible();
+    await expect(
+      invitation.getByRole("textbox", { name: /Email/ }),
+    ).toBeVisible();
     await noOverflow(page);
-  } finally { await context.close(); }
+  } finally {
+    await context.close();
+  }
 });
 async function demo(page: Page) {
   await page.goto("/");
@@ -470,8 +503,10 @@ test("desktop and Android installation instructions match their platform", async
   await page
     .getByRole("button", { name: "Help and installation", exact: true })
     .click();
-  await page.getByRole("dialog", { name: "Help and support", exact: true })
-    .getByRole("button", { name: "Add to Home Screen", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "Help and support", exact: true })
+    .getByRole("button", { name: "Add to Home Screen", exact: true })
+    .click();
   const dialog = page.getByRole("dialog", {
     name: "Make yourself at home",
     exact: true,
@@ -628,12 +663,25 @@ test("dark mode keeps all new-chat modes, forms, menus, recording errors and des
   await page.addInitScript(() => localStorage.setItem("relay-theme", "dark"));
   await demo(page);
   const forms =
-    "h2, label, input, textarea, select, small, .dialog-note, .kind-tabs>button, .text-button, .primary-button, .icon-button";
+    'h2, label, input, textarea, select, small, .dialog-note, .kind-tabs>button, [aria-label="Conversation actions"]>button, .text-button, .primary-button, .icon-button';
   await page.getByRole("button", { name: "New chat", exact: true }).click();
   let dialog = page.getByRole("dialog");
   for (const mode of ["Direct message", "Group", "Space"]) {
-    await dialog.getByRole("button", { name: mode, exact: true }).click();
-    await expect(dialog.locator(".kind-tabs>button.selected")).toHaveText(mode);
+    if (mode !== "Direct message")
+      await dialog
+        .getByRole("button", {
+          name: mode === "Group" ? "Start a group" : "Create a space",
+          exact: true,
+        })
+        .click();
+    await expect(dialog.locator(".kind-tabs")).toHaveCount(0);
+    if (mode !== "Direct message")
+      await expect(
+        dialog.getByRole("textbox", {
+          name: mode === "Group" ? "Group name optional" : "Space name",
+          exact: true,
+        }),
+      ).toBeVisible();
     await readable(dialog.locator(forms));
     const field = dialog.locator("input").first();
     await field.fill("Dark mode typing");
@@ -663,6 +711,7 @@ test("dark mode keeps all new-chat modes, forms, menus, recording errors and des
     );
     await readable(dialog.getByRole("alert"));
     await noOverflow(page);
+    await recipient.fill("");
   }
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -949,7 +998,7 @@ test("real M4A picker alias sends as canonical MP4 audio, decodes and survives r
   audio = row.locator("audio");
   await expect(audio).toHaveAttribute("src", /^data:audio\/mp4;base64,/);
   await expect(
-    row.getByRole("link", { name: "picker-tone.m4a", exact: true }),
+    row.getByRole("link", { name: "Download picker-tone.m4a", exact: true }),
   ).toHaveAttribute("download", "picker-tone.m4a");
 });
 

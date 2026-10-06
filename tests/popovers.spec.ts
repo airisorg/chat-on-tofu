@@ -77,7 +77,9 @@ test("phone contextual menu and reaction picker fit a dark short viewport", asyn
   expect(box!.x + box!.width).toBeLessThanOrEqual(378);
   expect(box!.y + box!.height).toBeLessThanOrEqual(448);
   await expect(
-    reaction.getByRole("button", { name: "React 👍", exact: true }),
+    reaction
+      .getByRole("region", { name: "Suggested", exact: true })
+      .getByRole("button", { name: "React 👍", exact: true }),
   ).toBeVisible();
 });
 

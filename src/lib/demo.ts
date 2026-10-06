@@ -1,5 +1,6 @@
 import type { ChatAction, ChatState, Conversation, Person } from './types';
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from './media-limits';
+import { isNativeEmoji } from './native-emoji';
 
 export const DEMO_STORAGE_KEY = 'relay-chat-explicit-demo-v1';
 
@@ -83,17 +84,21 @@ export function applyDemoAction(previous: ChatState, action: ChatAction): { stat
       break;
     case 'react': {
       if (message!.deleted) throw new Error('This message was deleted.');
-      const emoji = requireText(action.emoji, 20, 'Reaction');
+      if (!isNativeEmoji(action.emoji)) throw new Error('Choose an emoji reaction.');
+      const emoji = action.emoji;
       const reaction = message!.reactions.find(r => r.emoji === emoji);
-      if (!reaction) message!.reactions.push({ emoji, userIds: [userId] });
-      else if (reaction.userIds.includes(userId)) reaction.userIds = reaction.userIds.filter(id => id !== userId);
-      else reaction.userIds.push(userId);
+      if (action.active !== undefined && typeof action.active !== 'boolean') throw new Error('Choose a valid reaction state.');
+      const active = action.active ?? !reaction?.userIds.includes(userId);
+      if (!reaction && active) message!.reactions.push({ emoji, userIds: [userId] });
+      else if (reaction && !active) reaction.userIds = reaction.userIds.filter(id => id !== userId);
+      else if (reaction && !reaction.userIds.includes(userId)) reaction.userIds.push(userId);
       message!.reactions = message!.reactions.filter(r => r.userIds.length);
       break;
     }
     case 'star':
       if (message!.deleted) throw new Error('This message was deleted.');
-      message!.starred = !message!.starred;
+      if (action.starred !== undefined && typeof action.starred !== 'boolean') throw new Error('Choose a valid starred state.');
+      message!.starred = action.starred ?? !message!.starred;
       break;
     case 'read': conversation!.unread = action.unread ? Math.max(1, conversation!.unread) : 0; break;
     case 'create': {

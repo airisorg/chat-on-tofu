@@ -1,6 +1,35 @@
+.form {
+  --picker-fill: #dde3ea;
+  font-family: var(--font-title);
+}
+.body {
+  min-height: 0;
+}
+.desktop .body {
+  flex: 1;
+  overflow-y: auto;
+}
+:global(:root[data-theme="dark"]) .form {
+  --picker-fill: var(--search);
+}
+.hidden,
+.desktop .help {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.desktop .additional {
+  margin: 12px;
+}
 .picker {
   position: relative;
-  margin: 20px 0;
+  margin: 0;
   font-family: var(--font-title);
 }
 .picker label {
@@ -10,15 +39,16 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 0 12px;
+  height: 52px;
+  border: 0;
+  border-bottom: 1px solid var(--muted);
+  border-radius: 4px 4px 0 0;
+  padding: 8px 12px;
   color: var(--muted);
-  background: var(--surface);
+  background: var(--picker-fill);
 }
 .search:focus-within {
-  outline: 2px solid var(--blue);
-  outline-offset: 1px;
+  border-bottom: 2px solid var(--blue);
 }
 .search input {
   width: 100%;
@@ -26,7 +56,8 @@
   outline: 0;
   background: transparent;
   color: var(--ink);
-  padding: 13px 0;
+  height: 36px;
+  padding: 0;
   font-family: var(--font-title);
   font-size: 14px;
   line-height: 20px;
@@ -79,19 +110,20 @@
 .suggestions {
   max-height: 228px;
   overflow: auto;
-  margin-top: 8px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
+  margin-top: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 .suggestions button {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
   width: 100%;
-  min-height: 64px;
+  height: 52px;
+  min-height: 52px;
   text-align: left;
-  padding: 10px 12px;
+  padding: 8px 12px;
   color: var(--ink);
   border: 0;
   background: transparent;
@@ -109,13 +141,21 @@
 .suggestions strong,
 .suggestions small {
   display: block;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.suggestions strong {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
 }
 .suggestions small {
   color: var(--muted);
-  font-size: 14px;
-  line-height: 20px;
-  margin-top: 3px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+  margin-top: 0;
 }
 .suggestions button.active small,
 .suggestions button:hover small {
@@ -125,11 +165,65 @@
   display: grid;
   place-items: center;
   border-radius: 50%;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   flex-shrink: 0;
   color: var(--ink);
   background: var(--hover);
+}
+.modeActions {
+  padding: 4px 0;
+}
+.modeActions button {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 18px;
+  border-radius: 0;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: left;
+  color: var(--ink);
+}
+.sectionHeading {
+  padding: 6px 12px;
+  height: 32px;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.desktop .chips {
+  margin: 12px;
+}
+.desktop .hint,
+.desktop .error {
+  margin: 12px;
+}
+.desktop .footer {
+  flex-shrink: 0;
+  padding: 12px;
+  margin: 0;
+  border-top: 1px solid var(--line);
+}
+.desktop .footer > button {
+  height: 36px;
+  min-height: 36px;
+  border-radius: 18px;
+  padding: 0 24px;
+  font-size: 14px;
+}
+.compact .body {
+  overflow: visible;
+}
+.compact .picker {
+  margin: 20px 0;
+}
+.compact .footer > button,
+.compact :global(.kind-tabs > button) {
+  min-height: 44px;
 }
 .hint {
   color: var(--muted);
@@ -142,5 +236,12 @@
 @media (max-width: 767px), (pointer: coarse) {
   .search input {
     font-size: 16px;
+  }
+  .desktop .footer > button {
+    min-height: 44px;
+    height: 44px;
+  }
+  .modeActions button {
+    min-height: 44px;
   }
 }

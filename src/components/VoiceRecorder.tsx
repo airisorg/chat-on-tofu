@@ -2,6 +2,7 @@
 import {useEffect, useRef, useState} from 'react';
 import {Mic, Square, RotateCcw, Check} from 'lucide-react';
 import type {Attachment} from '@/lib/types';
+import {MAX_ATTACHMENT_BYTES, MAX_RECORDING_SECONDS} from '@/lib/media-limits';
 import styles from './VoiceRecorder.module.css';
 export default function VoiceRecorder({onRecorded,onClose}:{onRecorded:(attachment:Attachment)=>void;onClose:()=>void}) {
  const [recording,setRecording]=useState(false), [seconds,setSeconds]=useState(0), [error,setError]=useState(''), [attachment,setAttachment]=useState<Attachment|null>(null), [pending,setPending]=useState(false);
@@ -19,16 +20,16 @@ export default function VoiceRecorder({onRecorded,onClose}:{onRecorded:(attachme
    const candidate=['audio/mp4','audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus'].find(type=>MediaRecorder.isTypeSupported(type));
    if(!candidate){cleanup();setError('This browser cannot record a supported audio format. Try Safari or Chrome.');setPending(false);return;}
    const media=new MediaRecorder(microphone,{mimeType:candidate,audioBitsPerSecond:48000});recorder.current=media;chunks.current=[];
-   media.ondataavailable=event=>{if(event.data.size)chunks.current.push(event.data);if(chunks.current.reduce((sum,part)=>sum+part.size,0)>1048576&&media.state==='recording')media.stop();};
+   media.ondataavailable=event=>{if(event.data.size)chunks.current.push(event.data);if(chunks.current.reduce((sum,part)=>sum+part.size,0)>MAX_ATTACHMENT_BYTES&&media.state==='recording')media.stop();};
    media.onstop=()=>{
     cleanup();if(!alive.current)return;setRecording(false);
     const type=media.mimeType.split(';')[0];const blob=new Blob(chunks.current,{type});
-    if(!blob.size||blob.size>1048576){setError('Recording could not be saved. Please record a shorter voice message.');return;}
+    if(!blob.size||blob.size>MAX_ATTACHMENT_BYTES){setError('Recording could not be saved within the 5 MB limit. Please record a shorter voice message.');return;}
     const reader=new FileReader();reader.onload=()=>{if(alive.current&&typeof reader.result==='string')setAttachment({name:`Voice message.${type==='audio/mp4'?'m4a':type==='audio/ogg'?'ogg':'webm'}`,type,url:reader.result,size:blob.size});};reader.onerror=()=>{if(alive.current)setError('Unable to save this recording. Please try again.');};reader.readAsDataURL(blob);
    };
    media.onerror=()=>{cleanup();if(alive.current){setRecording(false);setError('Recording stopped. Please try again.');}};
    started.current=Date.now();media.start(500);setRecording(true);setPending(false);
-   timer.current=setInterval(()=>{const elapsed=Math.floor((Date.now()-started.current)/1000);if(alive.current)setSeconds(elapsed);if(elapsed>=60&&media.state==='recording')media.stop();},250);
+   timer.current=setInterval(()=>{const elapsed=Math.floor((Date.now()-started.current)/1000);if(alive.current)setSeconds(elapsed);if(elapsed>=MAX_RECORDING_SECONDS&&media.state==='recording')media.stop();},250);
   } catch (failure) {
    cleanup();if(!alive.current)return;setPending(false);setRecording(false);
    setError(failure instanceof DOMException&&failure.name==='NotAllowedError'?'Microphone access was denied. Allow it in your browser settings, then try again.':'Unable to open the microphone. Check that it is available and try again.');
@@ -37,7 +38,7 @@ export default function VoiceRecorder({onRecorded,onClose}:{onRecorded:(attachme
  return <div className={styles.recorder}>
   <div className={`${styles.visual} ${recording?styles.active:''}`}><Mic size={32}/></div>
   <p className={styles.timer}>{String(Math.floor(seconds/60)).padStart(2,'0')}:{String(seconds%60).padStart(2,'0')}</p>
-  <p>{recording?'Recording… tap stop when you’re done.':attachment?'Listen before adding your voice message.':'Record a voice message up to 60 seconds.'}</p>
+  <p>{recording?'Recording… tap stop when you’re done.':attachment?'Listen before adding your voice message.':'Record a voice message up to 2 minutes (5 MB).'}</p>
   {error&&<p role="alert" className={styles.error}>{error}</p>}
   {attachment&&<audio controls src={attachment.url} aria-label="Voice message preview" className={styles.audio}/>}
   <div className={styles.actions}>

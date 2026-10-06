@@ -1,6 +1,10 @@
 import { createClient, type User } from '@supabase/supabase-js';
 import postgres from 'postgres';
+import { createHash } from 'node:crypto';
 import type { Attachment, ChatAction, ChatState, Person } from './types';
+import { ACTION_RETRY_WINDOW_MS, MAX_RECENT_ACTIONS, canonicalJson } from './action-identity';
+import { MAX_CONVERSATION_MEMBERS } from './chat-limits';
+import { isNativeEmoji } from './native-emoji';
 import { MAX_ACTION_BODY_BYTES, MAX_ATTACHMENT_BASE64_LENGTH, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, MAX_HISTORY_PAYLOAD_BYTES, MAX_STAGED_ATTACHMENT_BYTES, MAX_STAGED_ATTACHMENTS, UPLOAD_CHUNK_BYTES, UPLOAD_TTL_SECONDS } from './media-limits';
 
 export class ChatError extends Error {
@@ -61,7 +65,8 @@ CREATE TABLE IF NOT EXISTS relay.messages (
   id uuid PRIMARY KEY, conversation_id uuid NOT NULL REFERENCES relay.conversations(id) ON DELETE CASCADE,
   author_id text NOT NULL REFERENCES relay.profiles(id), text text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(), edited boolean NOT NULL DEFAULT false,
-  deleted boolean NOT NULL DEFAULT false, parent_id uuid REFERENCES relay.messages(id), attachments jsonb NOT NULL DEFAULT '[]'
+  deleted boolean NOT NULL DEFAULT false, parent_id uuid REFERENCES relay.messages(id), attachments jsonb NOT NULL DEFAULT '[]',
+  attachment_metadata jsonb NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS relay.reactions (
   message_id uuid NOT NULL REFERENCES relay.messages(id) ON DELETE CASCADE,
@@ -85,12 +90,25 @@ CREATE TABLE IF NOT EXISTS relay.uploads (
   total_chunks integer NOT NULL CHECK(total_chunks BETWEEN 1 AND 5), chunks jsonb NOT NULL DEFAULT '{}',
   expires_at timestamptz NOT NULL, PRIMARY KEY(message_id,attachment_index)
 );
+CREATE TABLE IF NOT EXISTS relay.operations (
+  id uuid PRIMARY KEY, owner_id text NOT NULL REFERENCES relay.profiles(id),
+  digest text NOT NULL CHECK(length(digest)=64), result_id uuid,
+  created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL
+);
 CREATE INDEX IF NOT EXISTS relay_participants_user ON relay.participants(user_id);
-CREATE INDEX IF NOT EXISTS relay_messages_conversation_date ON relay.messages(conversation_id,created_at);
+ALTER TABLE relay.messages ADD COLUMN IF NOT EXISTS attachment_metadata jsonb NOT NULL DEFAULT '[]';
+UPDATE relay.messages SET attachment_metadata=(
+  SELECT coalesce(jsonb_agg(file.value - 'url' ORDER BY file.ordinality),'[]'::jsonb)
+  FROM jsonb_array_elements(attachments) WITH ORDINALITY AS file(value,ordinality)
+) WHERE attachment_metadata='[]'::jsonb AND jsonb_array_length(attachments)>0;
+CREATE INDEX IF NOT EXISTS relay_messages_conversation_recent ON relay.messages(conversation_id,created_at DESC,id DESC);
+DROP INDEX IF EXISTS relay.relay_messages_conversation_date;
 CREATE INDEX IF NOT EXISTS relay_invites_email ON relay.invites(email);
 CREATE INDEX IF NOT EXISTS relay_events_user_date ON relay.events(user_id,created_at);
 CREATE INDEX IF NOT EXISTS relay_uploads_owner_expiry ON relay.uploads(owner_id,expires_at);
 CREATE INDEX IF NOT EXISTS relay_uploads_expiry ON relay.uploads(expires_at);
+CREATE INDEX IF NOT EXISTS relay_operations_owner_expiry ON relay.operations(owner_id,expires_at);
+CREATE INDEX IF NOT EXISTS relay_operations_expiry ON relay.operations(expires_at);
 ALTER TABLE relay.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE relay.conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE relay.participants ENABLE ROW LEVEL SECURITY;
@@ -101,6 +119,7 @@ ALTER TABLE relay.stars ENABLE ROW LEVEL SECURITY;
 ALTER TABLE relay.schema_migrations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE relay.events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE relay.uploads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE relay.operations ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON ALL TABLES IN SCHEMA relay FROM PUBLIC;
 `;
 
@@ -109,7 +128,7 @@ export async function applySchema(sql: postgres.Sql): Promise<void> {
     await tx`select pg_advisory_xact_lock(724931108)`;
     const marker = await tx`select to_regclass('relay.schema_migrations') is not null as present`;
     if (marker[0].present) {
-      const installed = await tx`select version from relay.schema_migrations where version=3`;
+      const installed = await tx`select version from relay.schema_migrations where version=5`;
       if (installed.length) return;
     }
     // Static trusted schema only; all user values use bound parameters.
@@ -131,7 +150,7 @@ export async function applySchema(sql: postgres.Sql): Promise<void> {
       const published = await tx`select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='relay' and tablename='events'`;
       if (!published.length) await tx.unsafe('ALTER PUBLICATION supabase_realtime ADD TABLE relay.events');
     }
-    await tx`insert into relay.schema_migrations(version) values(3) on conflict do nothing`;
+    await tx`insert into relay.schema_migrations(version) values(5) on conflict do nothing`;
   });
 }
 
@@ -205,14 +224,19 @@ async function stateFor(sql: Query, userId: string): Promise<ChatState> {
     where exists(select 1 from relay.participants mine where mine.conversation_id=cp.conversation_id and mine.user_id=${userId})`;
   const inviteQuery = sql`select i.conversation_id,i.email from relay.invites i where exists
     (select 1 from relay.participants mine where mine.conversation_id=i.conversation_id and mine.user_id=${userId})`;
-  const messageQuery = sql`with recent as (
+  const messageQuery = sql`with selected as materialized (
+    select m.* from relay.participants mine cross join lateral (
+      select id,conversation_id,author_id,text,created_at,edited,deleted,parent_id,attachment_metadata
+      from relay.messages where conversation_id=mine.conversation_id
+      order by created_at desc,id desc limit 2000
+    ) m where mine.user_id=${userId}
+    order by m.created_at desc,m.id desc limit 2000
+  ), recent as (
     select m.id,m.conversation_id,m.author_id,m.text,m.created_at,m.edited,m.deleted,m.parent_id,
       coalesce((select jsonb_agg((file.value - 'url') || jsonb_build_object('url',
         '/api/attachments?messageId=' || m.id::text || '&index=' || (file.ordinality-1)::text)
-        order by file.ordinality) from jsonb_array_elements(m.attachments) with ordinality as file(value,ordinality)), '[]'::jsonb) as attachments
-    from relay.messages m where exists
-      (select 1 from relay.participants mine where mine.conversation_id=m.conversation_id and mine.user_id=${userId})
-    order by m.created_at desc,m.id desc limit 2000
+        order by file.ordinality) from jsonb_array_elements(m.attachment_metadata) with ordinality as file(value,ordinality)), '[]'::jsonb) as attachments
+    from selected m
   ), bounded as (
     select recent.*,sum(octet_length(attachments::text)+octet_length(text)+300) over(order by created_at desc,id desc) as payload_bytes from recent
   ) select m.*,p.name,p.email,p.avatar,p.status,
@@ -221,20 +245,35 @@ async function stateFor(sql: Query, userId: string): Promise<ChatState> {
     where m.payload_bytes <= ${MAX_HISTORY_PAYLOAD_BYTES} order by m.created_at desc,m.id desc`;
   const [profiles, conversations, members, invites, messages] = await Promise.all([profileQuery, conversationQuery, memberQuery, inviteQuery, messageQuery]);
   if (!profiles.length) throw new ChatError('Your profile is not available.', 500);
-  const reactions = messages.length ? await sql`select r.* from relay.reactions r
-    where r.message_id = any(${messages.map(m => String(m.id))}::uuid[])` : [];
+  const reactions = messages.length ? await sql`select r.message_id,r.emoji,array_agg(r.user_id order by r.user_id) as user_ids from relay.reactions r
+    where r.message_id = any(${messages.map(m => String(m.id))}::uuid[]) group by r.message_id,r.emoji` : [];
+  const membersByConversation = new Map<string, Person[]>();
+  for (const member of members) {
+    const key = String(member.conversation_id);
+    const list = membersByConversation.get(key) ?? [];
+    list.push(person(member)); membersByConversation.set(key,list);
+  }
+  for (const invite of invites) {
+    const key = String(invite.conversation_id);
+    const list = membersByConversation.get(key) ?? [];
+    list.push({id:`invite:${invite.email}`,name:String(invite.email).split('@')[0],email:String(invite.email),status:'Invited',color:'#6d7780'});
+    membersByConversation.set(key,list);
+  }
+  const reactionsByMessage = new Map<string, {emoji:string;userIds:string[]}[]>();
+  for (const reaction of reactions) {
+    const key = String(reaction.message_id);
+    const list = reactionsByMessage.get(key) ?? [];
+    list.push({emoji:String(reaction.emoji),userIds:(reaction.user_ids as unknown[]).map(String)});
+    reactionsByMessage.set(key,list);
+  }
   return {
     user: person(profiles[0]),
     conversations: conversations.map(c => {
-      const conversationMembers = members.filter(m => m.conversation_id === c.id).map(person);
-      const pending = invites.filter(i => i.conversation_id === c.id).map(i => ({ id: `invite:${i.email}`, name: String(i.email).split('@')[0], email: String(i.email), status: 'Invited', color: '#6d7780' }));
-      const allMembers = [...conversationMembers, ...pending];
+      const allMembers = membersByConversation.get(String(c.id)) ?? [];
       return { id: String(c.id), name: c.kind === 'dm' ? allMembers.find(p => p.id !== userId)?.name ?? String(c.name) : String(c.name), kind: c.kind as 'dm' | 'group' | 'space', members: allMembers, description: String(c.description), lastMessage: c.last_message ? String(c.last_message) : undefined, updatedAt: iso(c.updated_at), unread: c.force_unread ? Math.max(1, Number(c.unread)) : Number(c.unread), pinned: Boolean(c.pinned), muted: Boolean(c.muted), section: String(c.section) };
     }),
     messages: messages.reverse().map(m => {
-      const grouped = new Map<string, string[]>();
-      if (!m.deleted) for (const r of reactions.filter(r => r.message_id === m.id)) grouped.set(String(r.emoji), [...(grouped.get(String(r.emoji)) ?? []), String(r.user_id)]);
-      return { id: String(m.id), conversationId: String(m.conversation_id), author: person({ ...m, id: m.author_id }), text: m.deleted ? '' : String(m.text), createdAt: iso(m.created_at), edited: Boolean(m.edited), deleted: Boolean(m.deleted), parentId: m.parent_id ? String(m.parent_id) : undefined, starred: !m.deleted && Boolean(m.starred), attachments: m.deleted ? [] : (m.attachments as Attachment[]), reactions: [...grouped.entries()].map(([emoji, userIds]) => ({ emoji, userIds })) };
+      return { id: String(m.id), conversationId: String(m.conversation_id), author: person({ ...m, id: m.author_id }), text: m.deleted ? '' : String(m.text), createdAt: iso(m.created_at), edited: Boolean(m.edited), deleted: Boolean(m.deleted), parentId: m.parent_id ? String(m.parent_id) : undefined, starred: !m.deleted && Boolean(m.starred), attachments: m.deleted ? [] : (m.attachments as Attachment[]), reactions: m.deleted ? [] : reactionsByMessage.get(String(m.id)) ?? [] };
     }),
   };
 }
@@ -249,7 +288,7 @@ function uuid(value: unknown) {
 }
 function bool(value: unknown) { if (typeof value !== 'boolean') throw new ChatError('Invalid preference.'); return value; }
 function emails(value: unknown) {
-  if (!Array.isArray(value) || value.length > 30) throw new ChatError('Invite up to 30 people at a time.');
+  if (!Array.isArray(value) || value.length > MAX_CONVERSATION_MEMBERS) throw new ChatError(`Invite up to ${MAX_CONVERSATION_MEMBERS} people at a time.`);
   return [...new Set(value.map(v => {
     const email = text(v, 254, 'Email').toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ChatError('Enter valid email addresses.');
@@ -420,30 +459,71 @@ async function membership(sql: Query, conversationId: string, userId: string) {
   return rows[0];
 }
 async function accessibleMessage(sql: Query, messageId: string, userId: string) {
-  const rows = await sql`select m.* from relay.messages m join relay.participants p on p.conversation_id=m.conversation_id where m.id=${messageId} and p.user_id=${userId} for update of m for share of p`;
+  const rows = await sql`select m.id,m.conversation_id,m.author_id,m.deleted from relay.messages m join relay.participants p on p.conversation_id=m.conversation_id where m.id=${messageId} and p.user_id=${userId} for update of m for share of p`;
   if (!rows.length) throw new ChatError('This message is no longer available.', 404);
   return rows[0];
 }
 async function invite(sql: Query, conversationId: string, values: string[]) {
-  for (const email of values) {
-    const existing = await sql`select id from relay.profiles where email=${email}`;
-    if (existing.length) await sql`insert into relay.participants (conversation_id,user_id) values (${conversationId},${existing[0].id}) on conflict do nothing`;
-    else await sql`insert into relay.invites (conversation_id,email) values (${conversationId},${email}) on conflict do nothing`;
-  }
+  // Serialize slot reservations, including pending email invitations.
+  await sql`select id from relay.conversations where id=${conversationId} for update`;
+  const rows = await sql`select p.email from relay.participants cp join relay.profiles p on p.id=cp.user_id where cp.conversation_id=${conversationId}
+    union select email from relay.invites where conversation_id=${conversationId}`;
+  const reserved = new Set(rows.map(row=>String(row.email)));
+  const incoming = [...new Set(values)].filter(email=>!reserved.has(email));
+  if (!incoming.length) return;
+  if (reserved.size + incoming.length > MAX_CONVERSATION_MEMBERS) throw new ChatError(`A conversation can have up to ${MAX_CONVERSATION_MEMBERS} people, including pending invitations.`);
+  await sql`with known as (select id,email from relay.profiles where email=any(${incoming}::text[])),
+    added as (insert into relay.participants(conversation_id,user_id) select ${conversationId},id from known on conflict do nothing returning user_id)
+    insert into relay.invites(conversation_id,email)
+    select ${conversationId},incoming.email from unnest(${incoming}::text[]) as incoming(email) where not exists(select 1 from known where known.email=incoming.email) on conflict do nothing`;
 }
 
 export async function getChat(user: User, serverConnection?: postgres.Sql): Promise<ChatState> {
-  const sql = serverConnection ?? await database();
-  return sql.begin(async tx => { await prepareUser(tx, user); return stateFor(tx, user.id); });
+  return (await getChatResult(user, undefined, serverConnection)).state;
 }
 
-export async function mutateChat(user: User, input: unknown, serverConnection?: postgres.Sql): Promise<{ state: ChatState; id?: string }> {
+export async function getChatResult(user: User, clientActionId?: string, serverConnection?: postgres.Sql): Promise<{ state: ChatState; actionId?: string; id?: string }> {
+  const receiptId = clientActionId === undefined ? undefined : uuid(clientActionId);
+  const sql = serverConnection ?? await database();
+  return sql.begin(async tx => {
+    await prepareUser(tx, user);
+    const receipt = receiptId ? (await tx`select id,result_id from relay.operations where id=${receiptId} and owner_id=${user.id} and expires_at>now()`)[0] : undefined;
+    // The receipt contains no original payload. State always reflects current
+    // membership, including when an acknowledged leave revoked access.
+    return { state: await stateFor(tx, user.id), ...(receipt ? { actionId: String(receipt.id), id: receipt.result_id ? String(receipt.result_id) : undefined } : {}) };
+  });
+}
+
+export async function mutateChat(user: User, input: unknown, serverConnection?: postgres.Sql): Promise<{ state: ChatState; id?: string; actionId?: string }> {
   if (!input || typeof input !== 'object' || !('type' in input)) throw new ChatError('Choose a valid action.');
   const action = input as ChatAction;
+  const actionId = action.type !== 'send' && action.clientActionId !== undefined ? uuid(action.clientActionId) : undefined;
+  let expiresAt: string | undefined;
+  let digest: string | undefined;
+  if (actionId) {
+    const timestamp = typeof action.clientActionCreatedAt === 'string' ? Date.parse(action.clientActionCreatedAt) : NaN;
+    if (!Number.isFinite(timestamp)) throw new ChatError('This change needs a valid retry timestamp.');
+    if (Date.now() - timestamp >= ACTION_RETRY_WINDOW_MS) throw new ChatError('This change’s retry window expired. Review the current state before making a new change.', 409);
+    if (timestamp > Date.now() + 5 * 60 * 1000) throw new ChatError('Check your device clock before making changes.');
+    expiresAt = new Date(timestamp + ACTION_RETRY_WINDOW_MS).toISOString();
+    digest = createHash('sha256').update(canonicalJson({ ...action, clientActionId: undefined })).digest('hex');
+  }
   const sql = serverConnection ?? await database();
   return sql.begin(async tx => {
     await prepareUser(tx, user);
     const userId = user.id;
+    if (actionId) {
+      await tx`select pg_advisory_xact_lock(hashtextextended(${`relay-action:${actionId}`},0))`;
+      const previous = (await tx`select owner_id,digest,result_id from relay.operations where id=${actionId} for update`)[0];
+      if (previous) {
+        if (previous.owner_id !== userId || previous.digest !== digest) throw new ChatError('This change identifier was already used for a different change.', 409);
+        return { state: await stateFor(tx, userId), actionId, id: previous.result_id ? String(previous.result_id) : undefined };
+      }
+      await tx`select pg_advisory_xact_lock(hashtextextended(${`relay-action-owner:${userId}`},0))`;
+      await tx`delete from relay.operations where id in (select id from relay.operations where expires_at<=now() order by expires_at limit 500)`;
+      const count = await tx`select count(*)::int as count from relay.operations where owner_id=${userId} and expires_at>now()`;
+      if (Number(count[0].count) >= MAX_RECENT_ACTIONS) throw new ChatError('Too many recent changes. Please try again after the retry window has cleared.', 429);
+    }
     let id: string | undefined;
     let changedConversationId: string | undefined;
     switch (action.type) {
@@ -472,7 +552,8 @@ export async function mutateChat(user: User, input: unknown, serverConnection?: 
           const parent = await accessibleMessage(tx, parentId, userId);
           if (parent.conversation_id !== conversationId || parent.deleted) throw new ChatError('This thread is no longer available.');
         }
-        await tx`insert into relay.messages (id,conversation_id,author_id,text,parent_id,attachments) values (${id},${conversationId},${userId},${body},${parentId},${tx.json(files)})`;
+        const metadata = files.map(file=>({name:file.name,type:file.type,size:file.size}));
+        await tx`insert into relay.messages (id,conversation_id,author_id,text,parent_id,attachments,attachment_metadata) values (${id},${conversationId},${userId},${body},${parentId},${tx.json(files)},${tx.json(metadata)})`;
         await tx`delete from relay.uploads where message_id=${id} and owner_id=${userId}`;
         await tx`update relay.conversations set updated_at=now() where id=${conversationId}`;
         await tx`update relay.participants set last_read_at=now(),force_unread=false where conversation_id=${conversationId} and user_id=${userId}`;
@@ -491,7 +572,7 @@ export async function mutateChat(user: User, input: unknown, serverConnection?: 
         const message = await accessibleMessage(tx, messageId, userId);
         changedConversationId = String(message.conversation_id);
         if (message.author_id !== userId) throw new ChatError('You can only delete your own messages.', 403);
-        await tx`update relay.messages set text='',attachments='[]',deleted=true where id=${messageId} and author_id=${userId}`;
+        await tx`update relay.messages set text='',attachments='[]',attachment_metadata='[]',deleted=true where id=${messageId} and author_id=${userId}`;
         await tx`delete from relay.reactions where message_id=${messageId}`;
         await tx`delete from relay.stars where message_id=${messageId}`;
         break;
@@ -501,10 +582,13 @@ export async function mutateChat(user: User, input: unknown, serverConnection?: 
         const message = await accessibleMessage(tx, messageId, userId);
         changedConversationId = String(message.conversation_id);
         if (message.deleted) throw new ChatError('This message was deleted.');
-        const emoji = text(action.emoji, 20, 'Reaction');
-        if (!/\p{Extended_Pictographic}/u.test(emoji)) throw new ChatError('Choose an emoji reaction.');
-        const removed = await tx`delete from relay.reactions where message_id=${messageId} and user_id=${userId} and emoji=${emoji} returning message_id`;
-        if (!removed.length) await tx`insert into relay.reactions (message_id,user_id,emoji) values (${messageId},${userId},${emoji}) on conflict do nothing`;
+        if (!isNativeEmoji(action.emoji)) throw new ChatError('Choose an emoji reaction.');
+        const emoji = action.emoji;
+        if (action.active === undefined) {
+          const removed = await tx`delete from relay.reactions where message_id=${messageId} and user_id=${userId} and emoji=${emoji} returning message_id`;
+          if (!removed.length) await tx`insert into relay.reactions (message_id,user_id,emoji) values (${messageId},${userId},${emoji}) on conflict do nothing`;
+        } else if (bool(action.active)) await tx`insert into relay.reactions (message_id,user_id,emoji) values (${messageId},${userId},${emoji}) on conflict do nothing`;
+        else await tx`delete from relay.reactions where message_id=${messageId} and user_id=${userId} and emoji=${emoji}`;
         break;
       }
       case 'star': {
@@ -512,8 +596,11 @@ export async function mutateChat(user: User, input: unknown, serverConnection?: 
         const message = await accessibleMessage(tx, messageId, userId);
         changedConversationId = String(message.conversation_id);
         if (message.deleted) throw new ChatError('This message was deleted.');
-        const removed = await tx`delete from relay.stars where message_id=${messageId} and user_id=${userId} returning message_id`;
-        if (!removed.length) await tx`insert into relay.stars (message_id,user_id) values (${messageId},${userId}) on conflict do nothing`;
+        if (action.starred === undefined) {
+          const removed = await tx`delete from relay.stars where message_id=${messageId} and user_id=${userId} returning message_id`;
+          if (!removed.length) await tx`insert into relay.stars (message_id,user_id) values (${messageId},${userId}) on conflict do nothing`;
+        } else if (bool(action.starred)) await tx`insert into relay.stars (message_id,user_id) values (${messageId},${userId}) on conflict do nothing`;
+        else await tx`delete from relay.stars where message_id=${messageId} and user_id=${userId}`;
         break;
       }
       case 'read': {
@@ -579,7 +666,8 @@ export async function mutateChat(user: User, input: unknown, serverConnection?: 
           union select ${userId}
         ) recipient`;
     }
-    return { state: await stateFor(tx, userId), id };
+    if (actionId) await tx`insert into relay.operations(id,owner_id,digest,result_id,expires_at) values (${actionId},${userId},${digest!},${id ?? null},${expiresAt!})`;
+    return { state: await stateFor(tx, userId), id, ...(actionId ? { actionId } : {}) };
   });
 }
 

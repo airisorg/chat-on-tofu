@@ -1,4 +1,4 @@
-import { apiError, authenticatedUser, getChat, mutateChat, readActionBody, ChatError } from '@/lib/server';
+import { apiError, authenticatedUser, getChatResult, mutateChat, readActionBody, ChatError } from '@/lib/server';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -6,7 +6,8 @@ export const runtime = 'nodejs';
 export async function GET(request: Request) {
   try {
     const user = await authenticatedUser(request);
-    return Response.json({ state: await getChat(user) }, { headers: { 'Cache-Control': 'no-store' } });
+    const actionId = new URL(request.url).searchParams.get('clientActionId') ?? undefined;
+    return Response.json(await getChatResult(user, actionId), { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) { return apiError(error); }
 }
 

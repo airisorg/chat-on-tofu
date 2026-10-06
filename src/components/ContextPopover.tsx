@@ -16,12 +16,14 @@ export default function ContextPopover({
   anchor,
   onClose,
   variant = "menu",
+  hideHeader = false,
 }: {
   title: string;
   children: ReactNode;
   anchor?: HTMLElement | null;
   onClose: () => void;
-  variant?: "menu" | "form";
+  variant?: "menu" | "form" | "emoji" | "message";
+  hideHeader?: boolean;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const restoreFocus = useRef(true);
@@ -102,6 +104,7 @@ export default function ContextPopover({
       }
     };
     const keyboard = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       if (event.key === "Escape") {
         event.preventDefault();
         onClose();
@@ -155,18 +158,20 @@ export default function ContextPopover({
     <div
       ref={panel}
       data-context-popover
-      className={`${styles.panel} ${variant === "form" ? styles.form : ""}`}
+      className={`${styles.panel} ${variant === "menu" ? "" : styles[variant]}`}
       role="dialog"
       aria-modal="false"
       aria-label={title}
       style={position ? { ...position } : { visibility: "hidden" }}
     >
-      <div className={styles.header}>
-        <span>{title}</span>
-        <button type="button" aria-label="Close dialog" onClick={onClose}>
-          <X size={18} />
-        </button>
-      </div>
+      {!hideHeader && (
+        <div className={styles.header}>
+          <span>{title}</span>
+          <button type="button" aria-label="Close dialog" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+      )}
       {children}
     </div>
   );

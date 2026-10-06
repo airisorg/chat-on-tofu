@@ -1,7 +1,7 @@
 "use client";
 
-import { useId, useState, type FormEvent } from "react";
-import { Search, X } from "lucide-react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { ArrowLeft, Hash, Search, Users, X } from "lucide-react";
 import type { Conversation, Person } from "@/lib/types";
 import styles from "./NewConversationForm.module.css";
 
@@ -20,6 +20,7 @@ export default function NewConversationForm({
   people,
   currentEmail,
   busy,
+  compact = false,
   onKind,
   onSubmit,
   onClose,
@@ -28,15 +29,17 @@ export default function NewConversationForm({
   people: Person[];
   currentEmail: string;
   busy: boolean;
+  compact?: boolean;
   onKind: (kind: Conversation["kind"]) => void;
   onSubmit: (conversation: NewConversation) => Promise<void>;
   onClose: () => void;
 }) {
   const listId = useId();
+  const input = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [recipients, setRecipients] = useState<Recipient[]>([]);
   const [focused, setFocused] = useState(false);
-  const [active, setActive] = useState(0);
+  const [active, setActive] = useState(-1);
   const [error, setError] = useState("");
   const contacts = [
     ...new Map(
@@ -69,7 +72,7 @@ export default function NewConversationForm({
     if (!canAdd || chosen.has(person.email.toLowerCase())) return;
     setRecipients((values) => [...values, person]);
     setQuery("");
-    setActive(0);
+    setActive(-1);
     setError("");
   };
   const chooseKind = (next: Conversation["kind"]) => {
@@ -78,6 +81,9 @@ export default function NewConversationForm({
     setError("");
     onKind(next);
   };
+  useEffect(() => {
+    input.current?.focus({ preventScroll: true });
+  }, [kind]);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const values = [...recipients];
@@ -138,180 +144,228 @@ export default function NewConversationForm({
     });
   }
   return (
-    <form onSubmit={(event) => void submit(event)}>
-      <div className="kind-tabs" aria-label="Conversation type">
-        {(["dm", "group", "space"] as const).map((value) => (
-          <button
-            type="button"
-            key={value}
-            className={kind === value ? "selected" : ""}
-            aria-pressed={kind === value}
-            onClick={() => chooseKind(value)}
-          >
-            {value === "dm"
-              ? "Direct message"
-              : value === "group"
-                ? "Group"
-                : "Space"}
-          </button>
-        ))}
-      </div>
-      {kind !== "dm" && (
-        <label>
-          {kind === "space" ? "Space name" : "Group name"}
-          <span className="optional">
-            {kind === "group" ? " optional" : ""}
-          </span>
-          <input
-            name="name"
-            required={kind === "space"}
-            maxLength={80}
-            placeholder={
-              kind === "space" ? "e.g. Design team" : "Name this group"
-            }
-            autoComplete="off"
-          />
-        </label>
+    <form
+      className={`${styles.form} ${compact ? styles.compact : styles.desktop}`}
+      onSubmit={(event) => void submit(event)}
+    >
+      {compact && (
+        <div className="kind-tabs" aria-label="Conversation type">
+          {(["dm", "group", "space"] as const).map((value) => (
+            <button
+              type="button"
+              key={value}
+              className={kind === value ? "selected" : ""}
+              aria-pressed={kind === value}
+              onClick={() => chooseKind(value)}
+            >
+              {value === "dm"
+                ? "Direct message"
+                : value === "group"
+                  ? "Group"
+                  : "Space"}
+            </button>
+          ))}
+        </div>
       )}
-      <div className={styles.picker}>
-        <label htmlFor={`${listId}-input`}>
-          {kind === "dm" ? "To" : "Add people"}
-          {kind === "space" && <span className="optional"> optional</span>}
-        </label>
-        {recipients.length > 0 && (
-          <div className={styles.chips}>
-            {recipients.map((person) => (
-              <span key={person.email} className={styles.chip}>
-                <span title={person.email}>{person.name}</span>
-                <button
-                  type="button"
-                  aria-label={`Remove ${person.name}`}
-                  onClick={() =>
-                    setRecipients((values) =>
-                      values.filter((value) => value.email !== person.email),
-                    )
-                  }
-                >
-                  <X size={16} />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-        {canAdd && (
-          <div className={styles.search}>
-            <Search size={18} />
+      <div className={styles.body}>
+        {kind !== "dm" && (
+          <label className={styles.additional}>
+            {kind === "space" ? "Space name" : "Group name"}
+            <span className="optional">
+              {kind === "group" ? " optional" : ""}
+            </span>
             <input
-              id={`${listId}-input`}
-              role="combobox"
-              aria-autocomplete="list"
-              aria-expanded={expanded}
-              aria-controls={expanded ? listId : undefined}
-              aria-activedescendant={
-                expanded
-                  ? `${listId}-option-${Math.min(active, suggestions.length - 1)}`
-                  : undefined
+              name="name"
+              required={kind === "space"}
+              maxLength={80}
+              placeholder={
+                kind === "space" ? "e.g. Design team" : "Name this group"
               }
-              aria-describedby={`${listId}-help`}
-              placeholder="Name or email"
-              value={query}
               autoComplete="off"
-              autoCapitalize="none"
-              spellCheck={false}
-              onFocus={() => setFocused(true)}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setActive(0);
-                setError("");
-              }}
-              onKeyDown={(event) => {
-                if (event.nativeEvent.isComposing) return;
-                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                  event.preventDefault();
-                  setFocused(true);
-                  setActive(
-                    (index) =>
-                      (index +
-                        (event.key === "ArrowDown" ? 1 : -1) +
-                        suggestions.length) %
-                      Math.max(1, suggestions.length),
-                  );
-                }
-                if (event.key === "Enter" && expanded) {
-                  event.preventDefault();
-                  add(suggestions[Math.min(active, suggestions.length - 1)]);
-                }
-                if (event.key === "Escape" && expanded) {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  setFocused(false);
-                }
-                if (event.key === "Backspace" && !query)
-                  setRecipients((values) => values.slice(0, -1));
-              }}
             />
-          </div>
+          </label>
         )}
-        {expanded && (
-          <div
-            id={listId}
-            role="listbox"
-            aria-label="Suggested people"
-            className={styles.suggestions}
+        <div className={styles.picker}>
+          <label
+            className={kind === "dm" && !compact ? styles.hidden : undefined}
+            htmlFor={`${listId}-input`}
           >
-            {suggestions.map((person, index) => (
-              <button
-                id={`${listId}-option-${index}`}
-                role="option"
-                aria-selected={active === index}
-                type="button"
-                key={person.email}
-                className={active === index ? styles.active : ""}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => add(person)}
+            {kind === "dm" ? "To" : "Add people"}
+            {kind === "space" && <span className="optional"> optional</span>}
+          </label>
+          {recipients.length > 0 && (
+            <div className={styles.chips}>
+              {recipients.map((person) => (
+                <span key={person.email} className={styles.chip}>
+                  <span title={person.email}>{person.name}</span>
+                  <button
+                    type="button"
+                    aria-label={`Remove ${person.name}`}
+                    onClick={() =>
+                      setRecipients((values) =>
+                        values.filter((value) => value.email !== person.email),
+                      )
+                    }
+                  >
+                    <X size={16} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          {canAdd && (
+            <div className={styles.search}>
+              <Search size={18} />
+              <input
+                ref={input}
+                id={`${listId}-input`}
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={expanded}
+                aria-controls={expanded ? listId : undefined}
+                aria-activedescendant={
+                  expanded && active >= 0
+                    ? `${listId}-option-${Math.min(active, suggestions.length - 1)}`
+                    : undefined
+                }
+                aria-describedby={`${listId}-help`}
+                placeholder="Name or email"
+                value={query}
+                autoComplete="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                onFocus={() => setFocused(true)}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setActive(0);
+                  setError("");
+                }}
+                onKeyDown={(event) => {
+                  if (event.nativeEvent.isComposing) return;
+                  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setFocused(true);
+                    setActive((index) =>
+                      index < 0
+                        ? event.key === "ArrowDown"
+                          ? 0
+                          : suggestions.length - 1
+                        : (index +
+                            (event.key === "ArrowDown" ? 1 : -1) +
+                            suggestions.length) %
+                          Math.max(1, suggestions.length),
+                    );
+                  }
+                  if (event.key === "Enter" && expanded) {
+                    event.preventDefault();
+                    add(
+                      suggestions[
+                        Math.max(0, Math.min(active, suggestions.length - 1))
+                      ],
+                    );
+                  }
+                  if (event.key === "Escape" && expanded && compact) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setFocused(false);
+                  }
+                  if (event.key === "Backspace" && !query)
+                    setRecipients((values) => values.slice(0, -1));
+                }}
+              />
+            </div>
+          )}
+          {!compact &&
+            ((!term && recipients.length === 0) || kind !== "dm") && (
+              <div
+                className={styles.modeActions}
+                aria-label="Conversation actions"
               >
-                <span className={styles.avatar}>
-                  {person.name.slice(0, 1).toUpperCase()}
-                </span>
-                <span>
-                  <strong>{person.name}</strong>
-                  <small>{person.email}</small>
-                </span>
-                {!contacts.some(
-                  (contact) =>
-                    contact.email.toLowerCase() === person.email.toLowerCase(),
-                ) && <small>Invite</small>}
-              </button>
-            ))}
-          </div>
+                {kind !== "dm" && (
+                  <button type="button" onClick={() => chooseKind("dm")}>
+                    <ArrowLeft size={20} />
+                    Direct message
+                  </button>
+                )}
+                {kind !== "space" && (
+                  <button type="button" onClick={() => chooseKind("space")}>
+                    <Hash size={20} />
+                    Create a space
+                  </button>
+                )}
+                {kind !== "group" && (
+                  <button type="button" onClick={() => chooseKind("group")}>
+                    <Users size={20} />
+                    Start a group
+                  </button>
+                )}
+              </div>
+            )}
+          {expanded && (
+            <>
+              <div className={styles.sectionHeading}>People</div>
+              <div
+                id={listId}
+                role="listbox"
+                aria-label="Suggested people"
+                className={styles.suggestions}
+              >
+                {suggestions.map((person, index) => (
+                  <button
+                    id={`${listId}-option-${index}`}
+                    role="option"
+                    aria-selected={active === index}
+                    type="button"
+                    key={person.email}
+                    className={active === index ? styles.active : ""}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => add(person)}
+                  >
+                    <span className={styles.avatar}>
+                      {person.name.slice(0, 1).toUpperCase()}
+                    </span>
+                    <span>
+                      <strong>{person.name}</strong>
+                      <small>{person.email}</small>
+                    </span>
+                    {!contacts.some(
+                      (contact) =>
+                        contact.email.toLowerCase() ===
+                        person.email.toLowerCase(),
+                    ) && <small>Invite</small>}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          <small id={`${listId}-help`} className={styles.help}>
+            Search people from your conversations by name or email. Enter an
+            email to invite someone new.
+          </small>
+          {focused && term && suggestions.length === 0 && (
+            <p className={styles.hint}>
+              No matching people. Enter their full email to send an invitation.
+            </p>
+          )}
+        </div>
+        {kind === "space" && (
+          <label className={styles.additional}>
+            Description <span className="optional">optional</span>
+            <textarea
+              name="description"
+              rows={3}
+              maxLength={500}
+              placeholder="What is this space for?"
+            />
+          </label>
         )}
-        <small id={`${listId}-help`}>
-          Search people from your conversations by name or email. Enter an email
-          to invite someone new.
-        </small>
-        {focused && term && suggestions.length === 0 && (
-          <p className={styles.hint}>
-            No matching people. Enter their full email to send an invitation.
+        {error && (
+          <p role="alert" className={styles.error}>
+            {error}
           </p>
         )}
       </div>
-      {kind === "space" && (
-        <label>
-          Description <span className="optional">optional</span>
-          <textarea
-            name="description"
-            rows={3}
-            maxLength={500}
-            placeholder="What is this space for?"
-          />
-        </label>
-      )}
-      {error && (
-        <p role="alert" className={styles.error}>
-          {error}
-        </p>
-      )}
-      <div className="dialog-footer">
+      <div className={`dialog-footer ${styles.footer}`}>
         <button type="button" className="text-button" onClick={onClose}>
           Cancel
         </button>

@@ -8,6 +8,8 @@ import { MAX_DEMO_STORAGE_LENGTH } from './media-limits';
 import { PrivateMediaCache } from './media-cache';
 import { withRequestDeadline } from './request-deadline';
 import { uploadAttachments } from './media-upload';
+import { authenticatedFetch, refreshFailure } from './authenticated-fetch';
+import { PendingActionIds } from './action-identity';
 export { withRequestDeadline } from './request-deadline';
 
 type Config = { supabaseUrl: string; supabaseAnonKey: string; databaseConfigured: boolean };
@@ -61,10 +63,11 @@ export class PendingSendIds {
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(logical));
     if (revision !== this.revision) throw new Error('Your account changed. Please try again.');
     const fingerprint = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,'0')).join('');
-    const id = action.clientMessageId ?? this.ids.get(fingerprint) ?? crypto.randomUUID();
+    const existing = this.ids.get(fingerprint);
+    if (!existing && this.ids.size >= 64) throw new Error('Too many messages are still unconfirmed. Retry them before sending another message.');
+    const id = action.clientMessageId ?? existing ?? crypto.randomUUID();
     this.ids.set(fingerprint, id);
     // Retain hashes/UUIDs only, never message text or media; bound memory use.
-    if (this.ids.size > 64) this.ids.delete(this.ids.keys().next().value!);
     this.persist();
     return { fingerprint, action: { ...action, clientMessageId: id } };
   }
@@ -110,12 +113,39 @@ export function useChat(): ChatController {
   const mounted = useRef(false);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const pendingSends = useRef(new PendingSendIds());
+  const pendingActions = useRef(new PendingActionIds());
+  const reachableWhileOffline = useRef(false);
+  const fetchWithAuth = useCallback(async (url: string, init: RequestInit, signal: AbortSignal) => {
+    const start = generation.current;
+    const identity = identityRef.current;
+    const response = await authenticatedFetch(token => {
+      const headers = new Headers(init.headers);
+      headers.set('Authorization', `Bearer ${token}`);
+      return fetch(url, { ...init, headers, signal });
+    }, () => ({ identity: identityRef.current, generation: generation.current, token: tokenRef.current }), async () => {
+      const client = clientRef.current;
+      if (!client) throw refreshFailure({ name: 'AuthSessionMissingError' });
+      let renewed;
+      try { renewed = await client.auth.refreshSession(); } catch (failure) { throw refreshFailure(failure); }
+      signal.throwIfAborted();
+      if (start !== generation.current || identity !== identityRef.current) throw new Error('Your account changed. Please try again.');
+      if (renewed.error) throw refreshFailure(renewed.error);
+      const session = renewed.data.session;
+      if (!session) throw refreshFailure({ name: 'AuthSessionMissingError' });
+      if (session.user.id !== identity) throw new Error('Your account changed. Please try again.');
+      tokenRef.current = session.access_token;
+      void client.realtime.setAuth(session.access_token).catch(() => undefined);
+      return { identity, token: session.access_token };
+    }, signal);
+    reachableWhileOffline.current = true;
+    if (mounted.current) setOffline(false);
+    return response;
+  }, []);
   const wireState = useRef<ChatState | null>(null);
   const mediaChanged = useRef<() => void>(() => undefined);
   const mediaCache = useRef<PrivateMediaCache | null>(null);
   if (!mediaCache.current) mediaCache.current = new PrivateMediaCache(async (source, signal) => {
-    if (!navigator.onLine) throw new Error('You’re offline. Reconnect, then retry this file.');
-    return fetch(source, { signal, cache: 'no-store', headers: { Authorization: `Bearer ${tokenRef.current}` } });
+    return fetchWithAuth(source, { cache: 'no-store' }, signal);
   }, () => mediaChanged.current());
   mediaChanged.current = () => {
     if (!mounted.current || modeRef.current !== 'auth' || !wireState.current || wireState.current.user.id !== identityRef.current) return;
@@ -148,6 +178,8 @@ export function useChat(): ChatController {
     for (const controller of controllers.current) controller.abort();
     controllers.current.clear();
     pendingSends.current.clear();
+    pendingActions.current.clear();
+    reachableWhileOffline.current = false;
     mediaCache.current?.reset();
     writing.current = false;
     stopRealtime();
@@ -163,7 +195,7 @@ export function useChat(): ChatController {
     }
   }, [publish, stopRealtime]);
 
-  const request = useCallback(async (method: 'GET' | 'POST', action?: ChatAction) => {
+  const request = useCallback(async (method: 'GET' | 'POST', action?: ChatAction, receiptId?: string) => {
     const controller = new AbortController();
     controllers.current.add(controller);
     try {
@@ -171,11 +203,11 @@ export function useChat(): ChatController {
       return await withRequestDeadline(controller, timeout, async () => {
       let body = action;
       if (action?.type === 'send' && action.attachments?.length) body = await uploadAttachments(action, async chunk => {
-        const uploaded = await fetch('/api/uploads', {
-          method: 'POST', cache: 'no-store', signal: controller.signal,
-          headers: { Authorization: `Bearer ${tokenRef.current}`, 'Content-Type': 'application/json' },
+        const uploaded = await fetchWithAuth('/api/uploads', {
+          method: 'POST', cache: 'no-store',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(chunk),
-        });
+        }, controller.signal);
         const payload = await uploaded.json() as { ok?: boolean; error?: string };
         if (!uploaded.ok || payload.ok !== true) {
           const failure = new Error(payload.error || 'Unable to upload this file. Retry your message.') as Error & { status: number };
@@ -183,25 +215,29 @@ export function useChat(): ChatController {
           throw failure;
         }
       }, controller.signal);
-      const response = await fetch('/api/chat', {
-        method, cache: 'no-store', signal: controller.signal,
-        headers: { Authorization: `Bearer ${tokenRef.current}`, ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}) },
+      const response = await fetchWithAuth(receiptId ? `/api/chat?clientActionId=${encodeURIComponent(receiptId)}` : '/api/chat', {
+        method, cache: 'no-store',
+        headers: method === 'POST' ? { 'Content-Type': 'application/json' } : {},
         body: body ? JSON.stringify(body) : undefined,
-      });
-      const payload = await response.json() as { state?: ChatState; id?: string; error?: string };
+      }, controller.signal);
+      let payload: { state?: ChatState; id?: string; actionId?: string; error?: string };
+      try { payload = await response.json(); }
+      catch {
+        throw Object.assign(new Error('Chat is temporarily unavailable. Please try again.'), { status: response.ok ? 503 : response.status });
+      }
       if (!response.ok) {
         const failure = new Error(payload.error || 'Chat is temporarily unavailable.') as Error & { status: number };
         failure.status = response.status;
         throw failure;
       }
       if (!payload.state?.user || payload.state.user.id !== identityRef.current) throw new Error('Your account changed. Please sign in again.');
-      return payload as { state: ChatState; id?: string };
+      return payload as { state: ChatState; id?: string; actionId?: string };
       });
     } finally { controllers.current.delete(controller); }
-  }, []);
+  }, [fetchWithAuth]);
 
-  const sync = useCallback(async (): Promise<void> => {
-    if (modeRef.current !== 'auth' || syncing.current || writing.current || !navigator.onLine || document.hidden || !tokenRef.current) return;
+  const sync = useCallback(async (explicit = false): Promise<void> => {
+    if (modeRef.current !== 'auth' || syncing.current || writing.current || (!navigator.onLine && !reachableWhileOffline.current && !explicit) || document.hidden || !tokenRef.current) return;
     const start = generation.current;
     const version = revision.current;
     syncing.current = true;
@@ -210,6 +246,7 @@ export function useChat(): ChatController {
       const result = await request('GET');
       if (start !== generation.current || version !== revision.current || modeRef.current !== 'auth') return;
       pendingSends.current.bindVerifiedIdentity(result.state.user.id);
+      pendingActions.current.bindVerifiedIdentity(result.state.user.id);
       publish(result.state);
       configureRealtime.current?.(result.state.user.id);
       if (mounted.current) setError(null);
@@ -260,7 +297,7 @@ export function useChat(): ChatController {
       else tokenRef.current = session.access_token;
       if (clientRef.current && realtimeChannel.current) void clientRef.current.realtime.setAuth(session.access_token).catch(() => undefined);
       // Do not await Supabase calls inside its auth-state callback lock.
-      queueMicrotask(() => { if (!disposed) void sync(); });
+      queueMicrotask(() => { if (!disposed) void sync(true); });
     };
     const restoreDemo = () => {
       if (!DEMO_ALLOWED) return false;
@@ -329,12 +366,13 @@ export function useChat(): ChatController {
     const connectivity = () => {
       setOffline(!navigator.onLine);
       if (!navigator.onLine) {
+        reachableWhileOffline.current = false;
         controllers.current.forEach(controller => controller.abort(new Error('You’re offline. Reconnect to continue.')));
         mediaCache.current?.abortPending();
       }
-      else { if (!initialized) void initialize(); void sync(); }
+      else { if (!initialized) void initialize(); void sync(true); }
     };
-    const visibility = () => { if (!document.hidden) void sync(); };
+    const visibility = () => { if (!document.hidden) void sync(true); };
     connectivity();
     window.addEventListener('online', connectivity);
     window.addEventListener('offline', connectivity);
@@ -350,6 +388,7 @@ export function useChat(): ChatController {
       controllers.current.forEach(c => c.abort());
       controllers.current.clear();
       pendingSends.current.clear();
+      pendingActions.current.clear();
       mediaCache.current?.reset();
       stopRealtime();
       configureRealtime.current = null;
@@ -375,7 +414,6 @@ export function useChat(): ChatController {
     const start = generation.current;
     const pending = queue.current.catch(() => undefined).then(async () => {
       if (start !== generation.current) throw new Error('Your account changed. Please try again.');
-      if (!navigator.onLine) throw new Error('You’re offline. Reconnect before making changes.');
       if (modeRef.current === 'demo') {
         if (!stateRef.current) throw new Error('Start the demo first.');
         const result = applyDemoAction(stateRef.current, value);
@@ -387,21 +425,52 @@ export function useChat(): ChatController {
       if (modeRef.current !== 'auth' || !tokenRef.current) throw new Error('Sign in to continue.');
       if (stateRef.current?.user.id !== identityRef.current) throw new Error('Wait for your account to finish connecting.');
       pendingSends.current.bindVerifiedIdentity(stateRef.current.user.id);
+      pendingActions.current.bindVerifiedIdentity(stateRef.current.user.id);
       const prepared = value.type === 'send' ? await pendingSends.current.prepare(value) : null;
+      let intended = value;
+      if (value.type === 'star' && value.starred === undefined) {
+        const message = stateRef.current.messages.find(message => message.id === value.messageId);
+        if (message) intended = { ...value, starred: !message.starred };
+      } else if (value.type === 'react' && value.active === undefined) {
+        const message = stateRef.current.messages.find(message => message.id === value.messageId);
+        if (message) intended = { ...value, active: !message.reactions.some(reaction => reaction.emoji === value.emoji && reaction.userIds.includes(identityRef.current)) };
+      }
+      const mutation = intended.type !== 'send' ? await pendingActions.current.prepare(intended) : null;
       if (start !== generation.current) throw new Error('Your account changed. Please try again.');
-      if (!navigator.onLine) throw new Error('You’re offline. Reconnect before making changes.');
       revision.current++;
       writing.current = true;
       try {
-        const result = await request('POST', prepared?.action ?? value);
+        let result;
+        try { result = await request('POST', prepared?.action ?? mutation?.action ?? value); }
+        catch (failure) {
+          const status = (failure as Error & { status?: number }).status;
+          if (mutation && start === generation.current && modeRef.current === 'auth' && (status === undefined || status >= 500)) {
+            // A receipt query confirms a possibly committed change without
+            // replaying a toggle/create. Keep its identity if confirmation fails.
+            try {
+              const confirmed = await request('GET', undefined, mutation.action.clientActionId);
+              if (start === generation.current && modeRef.current === 'auth') {
+                revision.current++;
+                publish(confirmed.state);
+                if (confirmed.actionId === mutation.action.clientActionId) result = confirmed;
+              }
+            } catch { /* The original intent remains available for explicit retry. */ }
+          }
+          if (!result) {
+            if (mutation && status !== undefined && status >= 400 && status < 500 && status !== 401)
+              pendingActions.current.acknowledge(mutation.fingerprint, mutation.action.clientActionId);
+            throw failure;
+          }
+        }
         if (start !== generation.current || modeRef.current !== 'auth') throw new Error('Your account changed. Please try again.');
         revision.current++;
         publish(result.state);
         if (prepared && result.id === prepared.action.clientMessageId) pendingSends.current.acknowledge(prepared.fingerprint, result.id);
+        if (mutation) pendingActions.current.acknowledge(mutation.fingerprint, mutation.action.clientActionId);
         setError(null);
         return result.id;
       } finally {
-        writing.current = false;
+        if (start === generation.current) writing.current = false;
         if (start === generation.current && eventDirty.current) queueMicrotask(() => { void sync(); });
       }
     }).catch(failure => {
@@ -411,6 +480,9 @@ export function useChat(): ChatController {
           reset('guest');
         }
         setError(failure instanceof Error ? failure.message : 'Unable to complete this action.');
+        const status = (failure as Error & { status?: number }).status;
+        if (value.type === 'send' && modeRef.current === 'auth' && (status === undefined || status >= 500))
+          queueMicrotask(() => { void sync(true); });
       }
       throw failure;
     });
@@ -419,7 +491,7 @@ export function useChat(): ChatController {
   }, [publish, request, reset, sync]);
 
   const signIn = useCallback(() => {
-    if (!authAvailable || !configRef.current || !navigator.onLine) { setError('Google sign-in is unavailable. Please try again when you’re connected.'); return; }
+    if (!authAvailable || !configRef.current) { setError('Google sign-in is unavailable. Please try again when you’re connected.'); return; }
     dismissed.current = false;
     try { localStorage.removeItem(DEMO_CHOICE_KEY); } catch { /* Demo preference is optional. */ }
     const url = new URL('https://oauth.trytofu.ai/start');
@@ -430,6 +502,7 @@ export function useChat(): ChatController {
   const signOut = useCallback(async () => {
     dismissed.current = true;
     pendingSends.current.clear(true);
+    pendingActions.current.clear(true);
     reset('guest');
     try { localStorage.removeItem(AUTH_STORAGE_KEY); localStorage.removeItem(DEMO_CHOICE_KEY); } catch { /* Private browsing may disable storage. */ }
     const client = clientRef.current;

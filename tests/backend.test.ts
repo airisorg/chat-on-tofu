@@ -10,8 +10,35 @@ import { uploadAttachments } from '../src/lib/media-upload';
 import { POST as postUploadRoute } from '../src/app/api/uploads/route';
 import { PrivateMediaCache, privateMediaReference } from '../src/lib/media-cache';
 import { GET as getAttachmentRoute } from '../src/app/api/attachments/route';
+import emojiData from '@emoji-mart/data/sets/15/native.json';
+import { isNativeEmoji, MAX_REACTION_LENGTH } from '../src/lib/native-emoji';
 
 const anonKey = `e30.${Buffer.from(JSON.stringify({ role: 'anon' })).toString('base64url')}.test-signature`;
+
+test('native reaction validation accepts every picker variant', () => {
+  const values = Object.values(emojiData.emojis).flatMap(emoji => emoji.skins.map(skin => skin.native));
+  assert.equal(values.length, 3395);
+  assert.equal(Math.max(...values.map(value => value.length)), 15);
+  assert.ok(values.every(value => value.length <= MAX_REACTION_LENGTH));
+  for (const value of values) assert.equal(isNativeEmoji(value), true);
+});
+
+test('native reaction validation rejects text and mixed sequences', () => {
+  for (const value of [null, undefined, 7, {}, '', 'hello', '1', '👍 ready', 'ready👍', '👍👍', '🇬', '🇬🇷🇬🇷', '🔥🏽', '\u200D', '\uFE0F', '👍\n', ' 👍', '👍 ', '👍'.repeat(11)])
+    assert.equal(isNativeEmoji(value), false, 'only one bounded native sequence is allowed');
+});
+
+test('demo reactions use the same native sequence contract', () => {
+  const initial = createDemoState();
+  for (const emoji of ['🇬🇷', '1️⃣', '👩🏽‍💻']) {
+    const action: ChatAction = { type: 'react', messageId: 'demo-message-1', emoji };
+    const added = applyDemoAction(initial, action).state;
+    assert.deepEqual(added.messages[0].reactions, [{ emoji, userIds: [initial.user.id] }]);
+    assert.deepEqual(applyDemoAction(added, action).state.messages[0].reactions, []);
+  }
+  for (const emoji of ['hello', '👍 ready', '👍👍', '🇬', '👍\n'])
+    assert.throws(() => applyDemoAction(initial, { type: 'react', messageId: 'demo-message-1', emoji }), /emoji/);
+});
 
 test('chunk validation bounds indices, canonical base64, exact binary lengths, and 5 MB metadata', () => {
   const data = Buffer.alloc(UPLOAD_CHUNK_BYTES).toString('base64');

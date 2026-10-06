@@ -1,6 +1,7 @@
 // Binary attachment sizes use MiB. Base64 adds roughly one third to their
 // transport size; leave room for three full files and JSON/message metadata.
 export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+export const MAX_RECORDING_SECONDS = 120;
 export const MAX_ATTACHMENTS = 3;
 export const MAX_ATTACHMENT_BASE64_LENGTH = 4 * Math.ceil(MAX_ATTACHMENT_BYTES / 3);
 export const MAX_ACTION_BODY_BYTES = 22 * 1024 * 1024;
