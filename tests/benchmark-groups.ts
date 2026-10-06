@@ -12,10 +12,10 @@ const stage = process.argv[2] || 'baseline';
 const directory = process.env.CHAT_EVIDENCE_DIR ? resolve(process.env.CHAT_EVIDENCE_DIR) : resolve('test-results/group-performance');
 mkdirSync(directory,{recursive:true});
 type Sample={ms:number,queries:number,bytes:number,events:number};
-type Row={action:string,samples:number,medianMs:number,p95Ms:number,minMs:number,maxMs:number,medianQueries:number,medianResponseBytes:number,eventsPerAction:number[]};
+type Row={action:string,samples:number,medianMs:number,p95Ms:number,minMs:number,maxMs:number,medianQueries:number,medianResponseBytes:number,eventsPerAction:number[],measurements:Sample[]};
 const percentile=(values:number[],fraction:number)=>[...values].sort((a,b)=>a-b)[Math.max(0,Math.ceil(values.length*fraction)-1)];
 const rounded=(value:number)=>Math.round(value*100)/100;
-const report:{scope:string,stage:string,groups:unknown[],sources:string[]}={scope:'Disposable local PGlite PostgreSQL via actual server functions; excludes browser, auth verification, HTTP/TLS, hosting, production I/O and concurrent multi-connection load.',stage,groups:[],sources:['https://www.postgresql.org/docs/current/using-explain.html','https://www.postgresql.org/docs/current/indexes-multicolumn.html','https://www.postgresql.org/docs/current/indexes-partial.html']};
+const report:{scope:string,stage:string,groups:unknown[],sources:string[]}={scope:'Disposable local PGlite PostgreSQL via actual server functions, including internal serialized-payload budgeting; excludes final HTTP serialization, browser, auth verification, per-request quota enforcement, HTTP/TLS, upload transfer, hosting, production I/O and concurrent multi-connection load.',stage,groups:[],sources:['https://www.postgresql.org/docs/current/using-explain.html','https://www.postgresql.org/docs/current/indexes-multicolumn.html','https://www.postgresql.org/docs/current/indexes-partial.html']};
 
 async function main(){
 for(const people of [10,30]){
@@ -46,7 +46,7 @@ for(const people of [10,30]){
       if(index>=0)samples.push({ms,queries,bytes,events:eventsAfter-eventsBefore});
       if(after)await after(result);
     }
-    rows.push({action,samples:count,medianMs:rounded(percentile(samples.map(s=>s.ms),.5)),p95Ms:rounded(percentile(samples.map(s=>s.ms),.95)),minMs:rounded(Math.min(...samples.map(s=>s.ms))),maxMs:rounded(Math.max(...samples.map(s=>s.ms))),medianQueries:percentile(samples.map(s=>s.queries),.5),medianResponseBytes:percentile(samples.map(s=>s.bytes),.5),eventsPerAction:[...new Set(samples.map(s=>s.events))]});
+    rows.push({action,samples:count,medianMs:rounded(percentile(samples.map(s=>s.ms),.5)),p95Ms:rounded(percentile(samples.map(s=>s.ms),.95)),minMs:rounded(Math.min(...samples.map(s=>s.ms))),maxMs:rounded(Math.max(...samples.map(s=>s.ms))),medianQueries:percentile(samples.map(s=>s.queries),.5),medianResponseBytes:percentile(samples.map(s=>s.bytes),.5),eventsPerAction:[...new Set(samples.map(s=>s.events))],measurements:samples});
   };
   try{
     await applySchema(sql);for(const user of users)await getChat(user,sql);
@@ -102,7 +102,8 @@ for(const people of [10,30]){
     const plans:Record<string,unknown>={};
     for(const [name,query]of captured)plans[name]=(await pg.query(`EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) ${query.query}`,query.parameters)).rows;
     const stored=(await pg.query<{messages:number,events:number,operations:number}>('select (select count(*)::int from relay.messages) as messages,(select count(*)::int from relay.events) as events,(select count(*)::int from relay.operations) as operations')).rows[0];
-    report.groups.push({people,ownHistoryReturned:(await getChat(owner,sql)).messages.length,stored,rows,plans});
+    const installed=(await pg.query<{version:number}>('select max(version)::int as version from relay.schema_migrations')).rows[0].version;
+    report.groups.push({people,installedSchemaVersion:installed,ownHistoryReturned:(await getChat(owner,sql)).messages.length,stored,rows,plans});
     console.log(JSON.stringify({stage,people,actions:rows.length,create:rows.find(row=>row.action==='create group'),history:rows.find(row=>row.action==='get own history beside50000foreign rows')}));
   }finally{await pg.close();}
 }

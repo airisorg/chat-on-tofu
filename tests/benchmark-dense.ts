@@ -17,12 +17,13 @@ async function main(){
       await pg.query("insert into relay.messages(id,conversation_id,author_id,text,created_at) select gen_random_uuid(),$1,$2,'Dense '||number,now()-number*interval '1 second' from generate_series(1,2000) number",[id,users[0].id]);
       await pg.query("insert into relay.reactions(message_id,user_id,emoji) select m.id,p.user_id,'👍' from relay.messages m join relay.participants p on p.conversation_id=m.conversation_id where m.conversation_id=$1",[id]);
       await pg.exec('ANALYZE relay.messages; ANALYZE relay.reactions;');
-      const samples=[];let bytes=0;
-      for(let index=-1;index<5;index++){const start=performance.now();const state=await getChat(users[0],sql);const duration=performance.now()-start;bytes=Buffer.byteLength(JSON.stringify(state));if(index>=0)samples.push(duration);}
-      samples.sort((a,b)=>a-b);rows.push({people,messages:2000,reactions:people*2000,samples:5,medianMs:Math.round(samples[2]*100)/100,p95Ms:Math.round(samples[4]*100)/100,responseBytes:bytes});
+      const samples=[];let bytes=0,returnedMessages=0;
+      for(let index=-1;index<5;index++){const start=performance.now();const state=await getChat(users[0],sql);const duration=performance.now()-start;bytes=Buffer.byteLength(JSON.stringify(state));returnedMessages=state.messages.length;if(index>=0)samples.push(duration);}
+      const installed=(await pg.query<{version:number}>('select max(version)::int as version from relay.schema_migrations')).rows[0].version;
+      const sorted=[...samples].sort((a,b)=>a-b);rows.push({people,installedSchemaVersion:installed,messages:2000,returnedMessages,reactions:people*2000,samples:5,medianMs:Math.round(sorted[2]*100)/100,p95Ms:Math.round(sorted[4]*100)/100,responseBytes:bytes,measurementsMs:samples});
       console.log(JSON.stringify(rows.at(-1)));
     }finally{await pg.close();}
   }
-  const directory=process.env.CHAT_EVIDENCE_DIR?resolve(process.env.CHAT_EVIDENCE_DIR):resolve('test-results/group-performance');mkdirSync(directory,{recursive:true});writeFileSync(resolve(directory,`${stage}-dense.json`),JSON.stringify({scope:'Disposable local SQL and JavaScript server materialization, excludes auth/network/hosting.',rows},null,2)+'\n');
+  const directory=process.env.CHAT_EVIDENCE_DIR?resolve(process.env.CHAT_EVIDENCE_DIR):resolve('test-results/group-performance');mkdirSync(directory,{recursive:true});writeFileSync(resolve(directory,`${stage}-dense.json`),JSON.stringify({scope:'Disposable local SQL and JavaScript server materialization, including internal serialized-payload budgeting; excludes final HTTP serialization, auth verification, per-request quota enforcement, network/upload transfer, browser, hosting and multi-connection load.',rows},null,2)+'\n');
 }
 void main().catch(error=>{console.error(error instanceof Error?error.message:'Dense benchmark failed');process.exitCode=1;});
