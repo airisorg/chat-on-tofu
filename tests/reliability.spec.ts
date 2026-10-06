@@ -393,6 +393,54 @@ test('temporary GET503 keeps the session and workspace, then refresh recovers', 
   await expectAccountRetained(page);
 });
 
+test('native GET and send transport failures show connection guidance and retry the retained draft with its original ID', async ({ page, context }) => {
+  const fixture = await authenticatedFixture(page, context);
+  const main = page.getByRole('main');
+  const composer = main.getByRole('textbox', { name: 'Message', exact: true });
+  const guidance = 'Connection interrupted. Check your connection and try again.';
+  const nativeError = /TypeError|Failed to fetch|Load failed|NetworkError|fetch failed/i;
+  const text = 'A native transport failure retains this exact message intent.';
+  fixture.networkReachable = false;
+  try {
+    // This aborts the real browser fetch, rather than returning a fixture HTTP
+    // error. navigator.onLine remains true, as it can on a disconnected LAN.
+    await triggerSync(page);
+    await expect.poll(() => fixture.rejectedTransports.filter(request => !request.clientMessageId).length).toBeGreaterThan(0);
+    await expect(page.getByText(guidance, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(nativeError)).toHaveCount(0);
+    await expectAccountRetained(page);
+    await expect(main.getByRole('article').filter({ hasText: 'Initial workspace content stays available.' })).toBeVisible();
+
+    await composer.fill(text);
+    await main.getByRole('button', { name: 'Send message', exact: true }).click();
+    await expect.poll(() => fixture.rejectedTransports.filter(request => request.clientMessageId).length).toBe(1);
+    const failedId = fixture.rejectedTransports.find(request => request.clientMessageId)!.clientMessageId!;
+    expect(failedId).toMatch(uuid);
+    await expect(page.getByText(guidance, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(nativeError)).toHaveCount(0);
+    await expect(composer).toHaveValue(text);
+    await expect(main.getByRole('article').filter({ hasText: text })).toHaveCount(0);
+    expect(fixture.sends).toHaveLength(0);
+    expect(fixture.state.messages.filter(message => message.text === text)).toHaveLength(0);
+    await expectAccountRetained(page);
+
+    fixture.networkReachable = true;
+    const previousSuccessfulGets = fixture.successfulGets;
+    await triggerSync(page);
+    await expect.poll(() => fixture.successfulGets).toBeGreaterThan(previousSuccessfulGets);
+    await expect(composer).toHaveValue(text);
+    await main.getByRole('button', { name: 'Send message', exact: true }).click();
+    await expect(main.getByRole('article').filter({ hasText: text })).toHaveCount(1);
+    await expect(composer).toHaveValue('');
+    expect(fixture.sends).toHaveLength(1);
+    expect(fixture.sends[0].clientMessageId).toBe(failedId);
+    expect(fixture.state.messages.filter(message => message.text === text)).toHaveLength(1);
+    await expectAccountRetained(page);
+  } finally {
+    fixture.networkReachable = true;
+  }
+});
+
 test('a delayed stale GET cannot overwrite an acknowledged send', async ({ page, context }) => {
   const fixture = await authenticatedFixture(page, context);
   try {

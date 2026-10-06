@@ -11,6 +11,7 @@ import { uploadAttachments } from './media-upload';
 import { authenticatedFetch, refreshFailure } from './authenticated-fetch';
 import { PendingActionIds } from './action-identity';
 import { beginLogin, cleanLoginCallback, inspectLoginCallback, LOGIN_REQUEST_KEY } from './login-callback';
+import { errorMessage, normalizeNetworkError } from './network-error';
 export { withRequestDeadline } from './request-deadline';
 
 type Config = { supabaseUrl: string; supabaseAnonKey: string; databaseConfigured: boolean };
@@ -257,7 +258,7 @@ export function useChat(): ChatController {
         dismissed.current = true;
         reset('guest');
         if (mounted.current) setError('Your session expired. Please sign in again.');
-      } else if (mounted.current) setError(failure instanceof Error ? failure.message : 'Unable to connect to chat.');
+      } else if (mounted.current) setError(errorMessage(failure, 'Unable to connect to chat.'));
     } finally {
       if (start === generation.current) {
         syncing.current = false;
@@ -500,12 +501,12 @@ export function useChat(): ChatController {
           dismissed.current = true;
           reset('guest');
         }
-        setError(failure instanceof Error ? failure.message : 'Unable to complete this action.');
+        setError(errorMessage(failure, 'Unable to complete this action.'));
         const status = (failure as Error & { status?: number }).status;
         if (value.type === 'send' && modeRef.current === 'auth' && (status === undefined || status >= 500))
           queueMicrotask(() => { void sync(true); });
       }
-      throw failure;
+      throw normalizeNetworkError(failure);
     });
     queue.current = pending;
     return pending;

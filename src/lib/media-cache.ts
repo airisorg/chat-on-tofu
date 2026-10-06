@@ -1,6 +1,7 @@
 import type { Attachment, ChatState } from './types';
 import { MAX_ATTACHMENT_BYTES } from './media-limits';
 import { withRequestDeadline } from './request-deadline';
+import { errorMessage } from './network-error';
 
 const REFERENCE = /^\/api\/attachments\?messageId=([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})&index=([0-2])$/i;
 const MAX_CACHED_BYTES = 64 * 1024 * 1024;
@@ -172,7 +173,7 @@ export class PrivateMediaCache {
     } catch (failure) {
       if (!current()) return;
       entry.status = 'error';
-      entry.error = failure instanceof Error ? failure.message : 'Unable to load this file. Please retry.';
+      entry.error = errorMessage(failure, 'Unable to load this file. Please retry.');
     } finally {
       entry.controller = undefined;
       entry.resolve();

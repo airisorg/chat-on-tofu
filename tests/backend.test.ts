@@ -395,6 +395,29 @@ test('private media errors remain retryable without polling loops and validate M
   cache.reset();
 });
 
+test('private media native transport errors use connection guidance and retry only on request', async () => {
+  let attempts = 0;
+  const cache = new PrivateMediaCache(async () => {
+    if (++attempts === 1) throw new TypeError('Load failed');
+    return mediaResponse();
+  }, () => {}, { create: () => 'blob:network-retry', revoke: () => {} });
+  const state = mediaFixture();
+  const source = state.messages[0].attachments[0].url;
+  try {
+    cache.adopt(state);
+    await cache.load(source);
+    const failed = cache.materialize(state).messages[0].attachments[0];
+    assert.equal(failed.error, 'Connection interrupted. Check your connection and try again.');
+    assert.equal(failed.url, '');
+    cache.adopt(state);
+    await cache.load(source);
+    assert.equal(attempts, 1, 'a normalized error does not introduce automatic retries');
+    await cache.load(source, true);
+    assert.equal(attempts, 2);
+    assert.equal(cache.materialize(state).messages[0].attachments[0].url, 'blob:network-retry');
+  } finally { cache.reset(); }
+});
+
 test('media reference parsing never fetches arbitrary hosts or unregistered private URLs', async () => {
   let calls = 0;
   const cache = new PrivateMediaCache(async () => { calls++; return mediaResponse(); }, () => {});
