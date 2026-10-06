@@ -240,17 +240,34 @@ async function prepareUser(sql: Query, user: User) {
   // members can then deadlock while event foreign keys inspect each other's
   // profiles. Common requests only read; genuine verified-email/avatar changes
   // still update, and an initial concurrent sign-in uses an insert-only race.
-  let existing = (await sql`select email,avatar from relay.profiles where id=${user.id}`)[0];
+  const readProfile = async () => (await sql`select p.*,
+    exists(select 1 from relay.invites where email=${email}) as has_pending_invites
+    from relay.profiles p where p.id=${user.id}`)[0];
+  let existing = await readProfile();
+  // An absent profile always attempts a claim: an invitation can race the
+  // initial insert. Existing profiles check anew on every request, never cache.
+  const claimInvites = !existing || Boolean(existing.has_pending_invites);
   if (!existing) {
-    const inserted = await sql`insert into relay.profiles (id,email,name,avatar) values (${user.id},${email},${name},${avatar}) on conflict(id) do nothing returning email,avatar`;
-    existing = inserted[0] ?? (await sql`select email,avatar from relay.profiles where id=${user.id}`)[0];
+    // Concurrent first requests can conflict on either id or unique email.
+    // Always reread our verified id; an email owned by another identity is not
+    // a reason to share its profile or workspace.
+    const inserted = await sql`insert into relay.profiles (id,email,name,avatar) values (${user.id},${email},${name},${avatar}) on conflict do nothing returning *`;
+    existing = inserted[0] ?? await readProfile();
+    if (!existing) throw new ChatError('This verified email is already linked to another account.', 409);
   }
-  if (existing.email !== email) await sql`update relay.profiles set email=${email} where id=${user.id} and email is distinct from ${email}`;
-  if (avatar && !existing.avatar) await sql`update relay.profiles set avatar=${avatar} where id=${user.id} and avatar is null`;
-  await sql`with claimed as (delete from relay.invites where email=${email} returning conversation_id)
+  if (existing.email !== email) {
+    const changed = await sql`update relay.profiles set email=${email} where id=${user.id} and email is distinct from ${email} returning *`;
+    existing = changed[0] ?? await readProfile();
+  }
+  if (avatar && !existing.avatar) {
+    const changed = await sql`update relay.profiles set avatar=${avatar} where id=${user.id} and avatar is null returning *`;
+    existing = changed[0] ?? await readProfile();
+  }
+  if (claimInvites) await sql`with claimed as (delete from relay.invites where email=${email} returning conversation_id)
     insert into relay.participants (conversation_id,user_id)
     select conversation_id,${user.id} from claimed
     on conflict(conversation_id,user_id) do nothing`;
+  return existing;
 }
 
 function person(row: Record<string, unknown>): Person {
@@ -258,17 +275,18 @@ function person(row: Record<string, unknown>): Person {
 }
 function iso(value: unknown) { return new Date(value as string).toISOString(); }
 
-async function stateFor(sql: Query, userId: string): Promise<ChatState> {
-  const profileQuery = sql`select * from relay.profiles where id=${userId}`;
+async function stateFor(sql: Query, userId: string, preparedProfile?: Record<string, unknown>): Promise<ChatState> {
+  const profileQuery = preparedProfile ? Promise.resolve([preparedProfile]) : sql`select * from relay.profiles where id=${userId}`;
   const conversationQuery = sql`select c.*,p.pinned,p.muted,p.section,p.force_unread,
     (select count(*)::integer from relay.messages m where m.conversation_id=c.id and m.author_id<>${userId} and not m.deleted and m.created_at>p.last_read_at) as unread,
     (select case when m.deleted then 'Message deleted' when m.text<>'' then m.text else 'Attachment' end from relay.messages m where m.conversation_id=c.id order by m.created_at desc,m.id desc limit 1) as last_message
     from relay.conversations c join relay.participants p on p.conversation_id=c.id
     where p.user_id=${userId} order by c.updated_at desc,c.id`;
-  const memberQuery = sql`select p.*,cp.conversation_id from relay.profiles p
+  const rosterQuery = sql`select p.id,p.name,p.email,p.avatar,p.status,cp.conversation_id,false as invited from relay.profiles p
     join relay.participants cp on cp.user_id=p.id
-    where exists(select 1 from relay.participants mine where mine.conversation_id=cp.conversation_id and mine.user_id=${userId})`;
-  const inviteQuery = sql`select i.conversation_id,i.email from relay.invites i where exists
+    where exists(select 1 from relay.participants mine where mine.conversation_id=cp.conversation_id and mine.user_id=${userId})
+    union all
+    select null::text,null::text,i.email,null::text,'Invited'::text,i.conversation_id,true from relay.invites i where exists
     (select 1 from relay.participants mine where mine.conversation_id=i.conversation_id and mine.user_id=${userId})`;
   const messageQuery = sql`with selected as materialized (
     select m.* from relay.participants mine cross join lateral (
@@ -289,7 +307,7 @@ async function stateFor(sql: Query, userId: string): Promise<ChatState> {
     exists(select 1 from relay.stars s where s.message_id=m.id and s.user_id=${userId}) as starred
     from bounded m join relay.profiles p on p.id=m.author_id
     where m.payload_bytes <= ${MAX_HISTORY_PAYLOAD_BYTES} order by m.created_at desc,m.id desc`;
-  const [profiles, conversations, members, invites, messages] = await Promise.all([profileQuery, conversationQuery, memberQuery, inviteQuery, messageQuery]);
+  const [profiles, conversations, roster, messages] = await Promise.all([profileQuery, conversationQuery, rosterQuery, messageQuery]);
   if (!profiles.length) throw new ChatError('Your profile is not available.', 500);
   const messageIds = new Set(messages.map(message => String(message.id)));
   const missingParents = [...new Set(messages.flatMap(message => message.parent_id && !messageIds.has(String(message.parent_id)) ? [String(message.parent_id)] : []))];
@@ -308,12 +326,12 @@ async function stateFor(sql: Query, userId: string): Promise<ChatState> {
   const reactions = messages.length ? await sql`select r.message_id,r.emoji,array_agg(r.user_id order by r.user_id) as user_ids from relay.reactions r
     where r.message_id = any(${availableMessages.map(m => String(m.id))}::uuid[]) group by r.message_id,r.emoji` : [];
   const membersByConversation = new Map<string, Person[]>();
-  for (const member of members) {
+  for (const member of roster.filter(member => !member.invited)) {
     const key = String(member.conversation_id);
     const list = membersByConversation.get(key) ?? [];
     list.push(person(member)); membersByConversation.set(key,list);
   }
-  for (const invite of invites) {
+  for (const invite of roster.filter(member => member.invited)) {
     const key = String(invite.conversation_id);
     const list = membersByConversation.get(key) ?? [];
     list.push({id:`invite:${invite.email}`,name:String(invite.email).split('@')[0],email:String(invite.email),status:'Invited',color:'#6d7780'});
@@ -575,11 +593,13 @@ export async function getChatResult(user: User, clientActionId?: string, serverC
   const receiptId = clientActionId === undefined ? undefined : uuid(clientActionId);
   const sql = serverConnection ?? await database();
   return transaction(sql, async tx => {
-    await prepareUser(tx, user);
+    const profile = await prepareUser(tx, user);
     const receipt = receiptId ? (await tx`select id,result_id from relay.operations where id=${receiptId} and owner_id=${user.id} and expires_at>now()`)[0] : undefined;
     // The receipt contains no original payload. State always reflects current
     // membership, including when an acknowledged leave revoked access.
-    return { state: await stateFor(tx, user.id), ...(receipt ? { actionId: String(receipt.id), id: receipt.result_id ? String(receipt.result_id) : undefined } : {}) };
+    // GET can reuse its fresh profile. Mutations reload after possible name or
+    // status changes, so their acknowledgement always contains the saved value.
+    return { state: await stateFor(tx, user.id, profile), ...(receipt ? { actionId: String(receipt.id), id: receipt.result_id ? String(receipt.result_id) : undefined } : {}) };
   });
 }
 

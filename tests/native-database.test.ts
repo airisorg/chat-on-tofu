@@ -40,6 +40,78 @@ test('opt-in native PostgreSQL concurrency, TLS, memberships and immutable stagi
       return { owner, peer, conversationId };
     }
     const eventCount = async (sql: postgres.Sql, conversationId: string) => Number((await sql`select count(*)::int as count from relay.events where conversation_id=${conversationId}`)[0].count);
+    await t.test('concurrent first sign-ins claim one invitation without losing the latest profile', async () => {
+      const owner = fixtureUser('first-signin-owner'), account = fixtureUser('first-signin-peer');
+      await getChat(owner, admin);
+      const conversationId = (await mutateChat(owner, { type: 'create', kind: 'group', name: 'Concurrent first sign-in', emails: [account.email!] }, admin)).id!;
+      let probes = 0, release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      // Both real profile SELECTs return absence before either INSERT begins.
+      // The second native transaction must then take the insert-only conflict
+      // path, reread the committed profile and preserve the claimed membership.
+      const observed = (connection: postgres.Sql) => new Proxy(connection, { get(target, property) {
+        if (property === 'begin') return async (work: (tx: postgres.TransactionSql) => Promise<unknown>) => target.begin(tx => work(new Proxy(tx, {
+          apply: async (tag, receiver, argumentsList) => {
+            const rows = await Reflect.apply(tag, receiver, argumentsList);
+            const parts = argumentsList[0] as TemplateStringsArray;
+            if (Array.isArray(parts) && parts.join('').includes('has_pending_invites') && argumentsList.includes(account.id) && !rows.length) { probes++; await gate; }
+            return rows;
+          },
+        })));
+        return Reflect.get(target, property);
+      } });
+      const reads = Promise.allSettled([getChat(account, observed(one)), getChat(account, observed(two))]);
+      try { await until(async () => probes === 2, 'both identified first-sign-in profile reads'); }
+      finally { release(); }
+      const results = await reads;
+      for (const result of results) {
+        assert.equal(result.status, 'fulfilled', result.status === 'rejected' ? `${result.reason?.name} (${result.reason?.code ?? 'no code'}): ${result.reason?.message}` : undefined);
+        if (result.status === 'fulfilled') { assert.equal(result.value.user.id, account.id); assert.equal(result.value.user.email, account.email); assert.equal(result.value.conversations[0].id, conversationId); }
+      }
+      assert.equal(Number((await admin`select count(*)::int as count from relay.profiles where id=${account.id}`)[0].count), 1);
+      assert.equal(Number((await admin`select count(*)::int as count from relay.participants where user_id=${account.id} and conversation_id=${conversationId}`)[0].count), 1);
+      assert.equal(Number((await admin`select count(*)::int as count from relay.invites where conversation_id=${conversationId}`)[0].count), 0);
+      const otherIdentity = { ...account, id: crypto.randomUUID() };
+      await assert.rejects(getChat(otherIdentity, two), failure(409));
+      assert.equal(Number((await admin`select count(*)::int as count from relay.profiles where id=${otherIdentity.id}`)[0].count), 0);
+      assert.equal(Number((await admin`select count(*)::int as count from relay.participants where user_id=${otherIdentity.id}`)[0].count), 0);
+      completed.push('concurrent first-sign-in profile and invitation claim');
+    });
+    await t.test('an invitation committed after a negative probe is claimed on the next request', async () => {
+      const owner = fixtureUser('probe-owner'), original = fixtureUser('probe-peer');
+      const account = { ...original, email: 'probe-new-address@native-test.invalid' };
+      await getChat(owner, admin); await getChat(original, admin);
+      const conversationId = (await mutateChat(owner, { type: 'create', kind: 'space', name: 'Invitation boundary', emails: [] }, admin)).id!;
+      let entered!: () => void, release!: () => void;
+      const ready = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+      const observed = new Proxy(one, { get(target, property) {
+        if (property === 'begin') return async (work: (tx: postgres.TransactionSql) => Promise<unknown>) => target.begin(tx => work(new Proxy(tx, {
+          apply: async (tag, receiver, argumentsList) => {
+            const rows = await Reflect.apply(tag, receiver, argumentsList);
+            const parts = argumentsList[0] as TemplateStringsArray;
+            if (Array.isArray(parts) && parts.join('').includes('has_pending_invites') && argumentsList.includes(account.id)) { assert.equal(rows[0].has_pending_invites, false); entered(); await gate; }
+            return rows;
+          },
+        })));
+        return Reflect.get(target, property);
+      } });
+      const reading = getChat(account, observed);
+      const outcome = Promise.allSettled([reading]);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([ready, reading.then(() => { throw new Error('Profile read completed before its probe gate.'); }), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Profile probe gate timed out.')), 10000); })]);
+        // The inviter sees the committed old address; the new verified address
+        // remains unknown until the paused reader performs its actual UPDATE.
+        await mutateChat(owner, { type: 'invite', conversationId, emails: [account.email!] }, two);
+        assert.equal(Number((await admin`select count(*)::int as count from relay.invites where conversation_id=${conversationId}`)[0].count), 1);
+      } finally { clearTimeout(timer); release(); await outcome; }
+      const first = await reading;
+      assert.equal(first.user.email, account.email); assert.equal(first.conversations.length, 0);
+      const next = await getChat(account, one);
+      assert.equal(next.conversations[0].id, conversationId);
+      assert.equal(Number((await admin`select count(*)::int as count from relay.invites where conversation_id=${conversationId}`)[0].count), 0);
+      completed.push('invitation committed after EXISTS probe appears on next request');
+    });
     await t.test('two native sessions racing a send and an action UUID commit one message, one receipt and one event fanout', async () => {
       const { owner, peer, conversationId } = await pair('identical-races');
       const clientMessageId = crypto.randomUUID(), payload = { type: 'send', conversationId, text: 'Concurrent native send', clientMessageId };
@@ -213,6 +285,6 @@ test('opt-in native PostgreSQL concurrency, TLS, memberships and immutable stagi
     });
     const sourceHashes = Object.fromEntries(await Promise.all(['src/lib/server.ts', 'tests/native-database.test.ts', 'tests/helpers/native-postgres.ts'].map(async path => [path, createHash('sha256').update(await readFile(path)).digest('hex')])));
     await fixture.close();
-    await recordNativeEvidence('native-database', { scope: 'Fresh disposable native PostgreSQL, actual production SQL functions, five verified TLS driver connections; excludes browser, real provider, production network and managed platform.', version, schemaVersion: 6, distinctConnections: pids.length, cases: completed, passed: completed.length === 7, sourceHashes, durationMs: Date.now() - started, cleanup: 'cluster stopped and temporary directory removed successfully' });
+    await recordNativeEvidence('native-database', { scope: 'Fresh disposable native PostgreSQL, actual production SQL functions, five verified TLS driver connections; excludes browser, real provider, production network and managed platform.', version, schemaVersion: 6, distinctConnections: pids.length, cases: completed, passed: completed.length === 9, sourceHashes, durationMs: Date.now() - started, cleanup: 'cluster stopped and temporary directory removed successfully' });
   } finally { await fixture.close(); }
 });
