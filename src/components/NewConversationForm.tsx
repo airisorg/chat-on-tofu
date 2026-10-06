@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, Hash, Search, Users, X } from "lucide-react";
 import type { Conversation, Person } from "@/lib/types";
+import { MAX_CONVERSATION_MEMBERS } from "@/lib/chat-limits";
 import styles from "./NewConversationForm.module.css";
 
 type Recipient = Pick<Person, "name" | "email">;
@@ -14,6 +15,8 @@ export type NewConversation = {
 };
 const validEmail = (email: string) =>
   /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(email);
+const MAX_INVITEES = MAX_CONVERSATION_MEMBERS - 1;
+const invitationLimitMessage = `A conversation can have up to ${MAX_CONVERSATION_MEMBERS} people, including you. Add up to ${MAX_INVITEES} others.`;
 
 export default function NewConversationForm({
   kind,
@@ -66,7 +69,7 @@ export default function NewConversationForm({
     !contacts.some((person) => person.email.toLowerCase() === term)
   )
     suggestions.unshift({ email: term, name: term.split("@")[0] });
-  const canAdd = kind !== "dm" || recipients.length === 0;
+  const canAdd = (kind !== "dm" || recipients.length === 0) && recipients.length < MAX_INVITEES;
   const expanded = focused && canAdd && suggestions.length > 0;
   const add = (person: Recipient) => {
     if (!canAdd || chosen.has(person.email.toLowerCase())) return;
@@ -125,8 +128,8 @@ export default function NewConversationForm({
       setError("Choose another person to start a conversation.");
       return;
     }
-    if (values.length > 30) {
-      setError("Add up to 30 people at a time.");
+    if (values.length > MAX_INVITEES) {
+      setError(invitationLimitMessage);
       return;
     }
     const data = new FormData(event.currentTarget);

@@ -54,6 +54,7 @@ import {
 } from "lucide-react";
 import { useChat } from "@/lib/use-chat";
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from "@/lib/media-limits";
+import { restoreDraftMap, type DraftMap } from "@/lib/draft-storage";
 import VoiceRecorder from "./VoiceRecorder";
 import InstallHelp from "./InstallHelp";
 import ContextPopover from "./ContextPopover";
@@ -65,6 +66,7 @@ import SearchFilters from "./SearchFilters";
 import {
   DEFAULT_SEARCH_FILTERS,
   hasSearchFilters,
+  mentionsUser,
   searchLoadedMessages,
   type SearchFilters as SearchValues,
 } from "@/lib/search";
@@ -442,9 +444,7 @@ export default function ChatApp() {
       setInstallPrompt(null);
     }
   }
-  const draftMap = useRef<
-    Record<string, { text: string; attachments: Attachment[] }>
-  >({});
+  const draftMap = useRef<DraftMap>({});
   const threadDraftMap = useRef<Record<string, string>>({});
   const threadDraftRevision = useRef<Record<string, number>>({});
   const draftOwner = useRef<string | null>(null);
@@ -569,11 +569,7 @@ export default function ChatApp() {
     setModal(null);
     if (userId && state) {
       try {
-        const stored = localStorage.getItem(`relay-drafts:${userId}`);
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          if (parsed && typeof parsed === "object") draftMap.current = parsed;
-        }
+        draftMap.current = restoreDraftMap(localStorage.getItem(`relay-drafts:${userId}`), state.conversations);
       } catch {}
       let invitation = "";
       try {
@@ -1500,15 +1496,7 @@ export default function ChatApp() {
               : view === "starred"
                 ? m.starred
                 : view === "mentions"
-                  ? m.text.toLowerCase().includes("@all") ||
-                    m.text
-                      .toLowerCase()
-                      .includes(
-                        `@${state.user.name.split(" ")[0].toLowerCase()}`,
-                      ) ||
-                    m.text
-                      .toLowerCase()
-                      .includes(`@${state.user.email.toLowerCase()}`)
+                  ? mentionsUser(m.text, state.user)
                   : query &&
                     m.text.toLowerCase().includes(query.toLowerCase())),
         );
