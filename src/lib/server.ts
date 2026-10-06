@@ -288,9 +288,12 @@ async function stateFor(sql: Query, userId: string, preparedProfile?: Record<str
     union all
     select null::text,null::text,i.email,null::text,'Invited'::text,i.conversation_id,true from relay.invites i where exists
     (select 1 from relay.participants mine where mine.conversation_id=i.conversation_id and mine.user_id=${userId})`;
+  // Select indexed ordering keys before fetching message payloads. The
+  // parameterized LIMIT 1 lookup avoids the global join plan that scanned
+  // unrelated histories in our native PostgreSQL benchmark.
   const messageQuery = sql`with selected as materialized (
     select m.* from relay.participants mine cross join lateral (
-      select id,conversation_id,author_id,text,created_at,edited,deleted,parent_id,attachment_metadata
+      select id,conversation_id,created_at
       from relay.messages where conversation_id=mine.conversation_id
       order by created_at desc,id desc limit 2000
     ) m where mine.user_id=${userId}
@@ -300,7 +303,10 @@ async function stateFor(sql: Query, userId: string, preparedProfile?: Record<str
       coalesce((select jsonb_agg((file.value - 'url') || jsonb_build_object('url',
         '/api/attachments?messageId=' || m.id::text || '&index=' || (file.ordinality-1)::text)
         order by file.ordinality) from jsonb_array_elements(m.attachment_metadata) with ordinality as file(value,ordinality)), '[]'::jsonb) as attachments
-    from selected m
+    from selected selected_id cross join lateral (
+      select id,conversation_id,author_id,text,created_at,edited,deleted,parent_id,attachment_metadata
+      from relay.messages where id=selected_id.id limit 1
+    ) m
   ), bounded as (
     select recent.*,sum(octet_length(attachments::text)+octet_length(text)+300) over(order by created_at desc,id desc) as payload_bytes from recent
   ) select m.*,p.name,p.email,p.avatar,p.status,

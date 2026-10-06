@@ -85,6 +85,66 @@ test('a verified email collision never reuses the profile or workspace of anothe
   } finally { await pg.close(); }
 });
 
+test('global history preserves tied ordering, message ownership and metadata across busy conversations', async () => {
+  const pg = new PGlite(), sql = sqlAdapter(pg, callback => pg.transaction(tx => callback(tx)));
+  const owner = user('history-owner'), peer = user('history-peer'), outsider = user('history-outsider');
+  try {
+    await applySchema(sql);
+    for (const account of [owner, peer, outsider]) await getChat(account, sql);
+    const owned: string[] = [];
+    for (let index = 0; index < 3; index++) {
+      owned.push((await mutateChat(owner, { type: 'create', kind: 'group', name: `Busy ${index}`, emails: [peer.email!] }, sql)).id!);
+    }
+    const foreign = (await mutateChat(outsider, { type: 'create', kind: 'space', name: 'Inaccessible', emails: [] }, sql)).id!;
+    // Equal timestamps across conversations exercise the global UUID tiebreaker.
+    // A newer inaccessible history must not displace any authorized messages.
+    for (const [index, conversationId] of [...owned, foreign].entries()) {
+      await pg.query(`insert into relay.messages(id,conversation_id,author_id,text,created_at,edited,deleted,attachment_metadata)
+        select md5($1::text || ':' || n)::uuid,$1::uuid,$2,'Conversation ' || $3::text || ' message ' || n,
+          '2026-10-05T00:00:00Z'::timestamptz + n * interval '1 second' + $4::int * interval '1 day',
+          n % 17 = 0,n % 31 = 0,
+          case when n % 29 = 0 then '[{"name":"note.txt","type":"text/plain","size":4}]'::jsonb else '[]'::jsonb end
+        from generate_series(1,1005) n`, [conversationId, index === 3 ? outsider.id : peer.id, index, index === 3 ? 1 : 0]);
+    }
+    const decoratedId = (await pg.query<{ id: string }>('select id from relay.messages where conversation_id=$1 and not deleted order by created_at desc,id desc limit 1', [owned[0]])).rows[0].id;
+    await pg.query('insert into relay.stars(message_id,user_id) values($1,$2)', [decoratedId, owner.id]);
+    for (const account of [owner, peer]) {
+      await pg.query("insert into relay.reactions(message_id,user_id,emoji) values($1,$2,'👍')", [decoratedId, account.id]);
+    }
+    async function verify() {
+      // This oracle uses an unrestricted owned-message join and global LIMIT,
+      // independently of the implementation's per-conversation working sets.
+      const expected = (await pg.query<{ id: string; conversation_id: string; text: string; edited: boolean; deleted: boolean; attachment_metadata: unknown[] }>(`
+        select m.id,m.conversation_id,m.text,m.edited,m.deleted,m.attachment_metadata
+        from relay.messages m join relay.participants p on p.conversation_id=m.conversation_id
+        where p.user_id=$1 order by m.created_at desc,m.id desc limit 2000`, [owner.id])).rows.reverse();
+      const state = await getChat(owner, sql);
+      assert.equal(state.messages.length, 2000);
+      assert.deepEqual(state.messages.map(message => message.id), expected.map(message => message.id));
+      for (const [index, message] of state.messages.entries()) {
+        const row = expected[index];
+        assert.equal(message.conversationId, row.conversation_id);
+        assert.equal(message.author.id, peer.id);
+        assert.equal(message.text, row.deleted ? '' : row.text);
+        assert.equal(message.edited, row.edited); assert.equal(message.deleted, row.deleted);
+        assert.deepEqual(message.attachments, row.deleted ? [] : row.attachment_metadata.map((metadata, attachmentIndex) => ({
+          ...(metadata as object), url: `/api/attachments?messageId=${row.id}&index=${attachmentIndex}`,
+        })));
+      }
+      assert.ok(state.messages.every(message => owned.includes(message.conversationId)));
+      const decorated = state.messages.find(message => message.id === decoratedId)!;
+      assert.equal(decorated.starred, true);
+      assert.deepEqual(decorated.reactions, [{ emoji: '👍', userIds: [owner.id, peer.id].sort() }]);
+      return state;
+    }
+    await verify();
+    await mutateChat(owner, { type: 'leave', conversationId: owned[1] }, sql);
+    const afterLeave = await verify();
+    assert.ok(afterLeave.messages.every(message => message.conversationId !== owned[1]), 'membership is checked anew after leaving');
+    assert.equal((await pg.query<{ count: number }>('select count(*)::int as count from relay.messages')).rows[0].count, 4020, 'selecting a history never deletes stored data');
+  } finally { await pg.close(); }
+});
+
 test('combined roster preserves thirty reserved slots and does not expose another workspace', async () => {
   const pg = new PGlite(), sql = sqlAdapter(pg, callback => pg.transaction(tx => callback(tx)));
   const owner = user('roster-owner'), peer = user('roster-peer'), outsider = user('roster-outsider');
