@@ -57,6 +57,8 @@ Use `npx tsx tests/benchmark-groups.ts final` and `npx tsx tests/benchmark-dense
 
 Install test browsers with `npx playwright install chromium webkit` if needed. On macOS the Chromium suites use the installed Google Chrome; set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to select a different Chromium installation. The suites require a local server and cannot accidentally crawl the hosted app.
 
+Use `npm run test:geometry` for measured history/composer alignment, unread-count insets and short-window draft controls in Chrome and WebKit. See [layout validation](docs/layout-validation.md) for the Google reference measurements, failing baselines and the distinction between screenshot drift checks and reference parity.
+
 Desktop and mobile viewport screenshots are generated during verification. Physical iPhone installation, hardware keyboard behavior and standalone Google account switching require device acceptance; desktop emulation cannot establish those results.
 
 Reference design sources: [Google Chat interface](https://support.google.com/chat/answer/7652236?co=GENIE.Platform%3DDesktop&hl=en), [Google Chat iPhone navigation](https://support.google.com/chat/answer/14170781?co=GENIE.Platform%3DiOS&hl=en), [official desktop screenshot](https://workspace.google.com/blog/product-announcements/welcome-new-google-chat), [current Google Chat product page](https://workspace.google.com/products/chat/), [Apple Home Screen instructions](https://support.apple.com/en-lamr/guide/iphone/iphea86e5236/ios).

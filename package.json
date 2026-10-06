@@ -15,6 +15,7 @@
     "test:network": "playwright test --config playwright.network-ux.config.ts",
     "test:visual": "playwright test --config playwright.visual.config.ts",
     "test:spacing": "playwright test --config playwright.spacing.config.ts",
+    "test:geometry": "playwright test --config playwright.geometry.config.ts",
     "test:offline": "playwright test --config playwright.offline.config.ts",
     "test:emoji": "playwright test --config playwright.emoji.config.ts",
     "test:media": "playwright test --config playwright.media.config.ts",

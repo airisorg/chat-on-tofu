@@ -1553,7 +1553,7 @@ export default function ChatApp() {
               ) : (
                 <File size={15} />
               )}
-              {f.name}
+              <span className="draft-attachment-name" title={f.name}>{f.name}</span>
               {f.type.startsWith("audio/") && (
                 <audio
                   className="draft-audio"
@@ -2086,7 +2086,7 @@ export default function ChatApp() {
                 </div>
               )}
             </div>
-            {composer()}
+            <div className="composer-viewport">{composer()}</div>
           </>
         ) : (
           <div className="home-view">

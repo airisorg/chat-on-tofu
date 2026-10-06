@@ -71,7 +71,7 @@ for (const theme of ["light", "dark"] as const) {
     const alignment = await wrapper.evaluate(node => {
       const rect = node.getBoundingClientRect(), scroll = node.parentElement!, parent = scroll.getBoundingClientRect(), style = getComputedStyle(scroll);
       const left = parseFloat(style.paddingLeft), right = parseFloat(style.paddingRight);
-      return { width: rect.width, center: rect.x + rect.width / 2, contentCenter: parent.x + left + (scroll.clientWidth - left - right) / 2 };
+      return { width: rect.width, center: rect.x + rect.width / 2, contentCenter: parent.x + scroll.clientLeft + left + (scroll.clientWidth - left - right) / 2 };
     });
     expect(alignment.width).toBeLessThanOrEqual(896);
     expect(alignment.width).toBeGreaterThanOrEqual(800);
