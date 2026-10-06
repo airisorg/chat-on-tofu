@@ -1,1 +1,83 @@
-.recorder{text-align:center;padding:8px 0 14px;color:#444746}.visual{width:76px;height:76px;border-radius:50%;background:#e8f0fe;color:#1967d2;display:grid;place-items:center;margin:12px auto}.active{background:#fce8e6;color:#c5221f;animation:pulse 1.3s infinite}.timer{font-size:32px;font-variant-numeric:tabular-nums;margin:16px 0 10px}.audio{display:block;width:100%;margin:20px auto}.actions{display:flex;justify-content:center;gap:12px;flex-wrap:wrap;margin:20px 0}.actions button{border:1px solid #dadce0;border-radius:24px;padding:12px 18px;min-height:44px;display:flex;align-items:center;justify-content:center;gap:8px;background:white;color:#1967d2;font:inherit;cursor:pointer}.actions .primary{background:#0b57d0;color:white;border-color:#0b57d0}.actions button:disabled{opacity:.55;cursor:wait}.recorder small{display:block;color:#747775;font-size:12px;line-height:1.5}.error{background:#fce8e6;color:#a50e0e;border-radius:12px;padding:12px;line-height:1.5}@keyframes pulse{50%{box-shadow:0 0 0 10px #fce8e660}}@media(prefers-reduced-motion:reduce){.active{animation:none}}
+.recorder {
+  text-align: center;
+  padding: 8px 0 14px;
+  color: var(--ink);
+}
+.visual {
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  background: var(--blue-soft);
+  color: var(--blue);
+  display: grid;
+  place-items: center;
+  margin: 12px auto;
+}
+.active {
+  background: var(--error-bg);
+  color: var(--error-ink);
+  animation: pulse 1.3s infinite;
+}
+.timer {
+  font-size: 32px;
+  font-variant-numeric: tabular-nums;
+  margin: 16px 0 10px;
+}
+.audio {
+  display: block;
+  width: 100%;
+  margin: 20px auto;
+}
+.actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 20px 0;
+}
+.actions button {
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 12px 18px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--surface);
+  color: var(--blue);
+  font: inherit;
+  cursor: pointer;
+}
+.actions .primary {
+  background: var(--blue);
+  color: var(--surface);
+  border-color: var(--blue);
+}
+.actions button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.recorder small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.error {
+  background: var(--error-bg);
+  color: var(--error-ink);
+  border-radius: 12px;
+  padding: 12px;
+  line-height: 1.5;
+}
+@keyframes pulse {
+  50% {
+    box-shadow: 0 0 0 10px #fce8e660;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .active {
+    animation: none;
+  }
+}

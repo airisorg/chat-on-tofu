@@ -1,0 +1,76 @@
+.wrapper {
+  min-width: 0;
+  max-width: 100%;
+}
+.wrapper > a {
+  display: flex;
+}
+.wrapper > a:global(.image-attachment) {
+  flex-direction: column;
+}
+.shared {
+  width: 100%;
+}
+.placeholder {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 280px;
+  max-width: 100%;
+  min-height: 76px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  color: var(--ink);
+}
+.placeholder > svg {
+  flex-shrink: 0;
+  color: var(--blue);
+}
+.placeholder > span {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.placeholder strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.placeholder small {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.retry {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  gap: 6px;
+  min-height: 44px;
+  padding: 8px;
+  border-radius: 12px;
+  color: var(--blue);
+}
+.sharedLink {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  color: var(--ink);
+  background: var(--surface-soft);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.sharedLink > span {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.sharedLink > svg {
+  color: var(--blue);
+  flex-shrink: 0;
+}

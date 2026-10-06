@@ -1,4 +1,5 @@
 import type { ChatAction, ChatState, Conversation, Person } from './types';
+import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from './media-limits';
 
 export const DEMO_STORAGE_KEY = 'relay-chat-explicit-demo-v1';
 
@@ -63,7 +64,7 @@ export function applyDemoAction(previous: ChatState, action: ChatAction): { stat
     case 'send': {
       const text = requireText(action.text, 6000, 'Message', Boolean(action.attachments?.length));
       if (action.parentId && !state.messages.some(m => m.id === action.parentId && m.conversationId === conversation!.id && !m.deleted)) throw new Error('This thread is no longer available.');
-      if ((action.attachments?.length ?? 0) > 3 || action.attachments?.some(a => a.size > 1048576 || !/^data:(image\/(png|jpeg|gif|webp)|audio\/(webm|mp4|ogg)|text\/plain|application\/pdf);base64,/.test(a.url))) throw new Error('Attach up to 3 images, voice notes, text files, or PDFs, each under 1 MB.');
+      if ((action.attachments?.length ?? 0) > MAX_ATTACHMENTS || action.attachments?.some(a => a.size > MAX_ATTACHMENT_BYTES || !/^data:(image\/(png|jpeg|gif|webp)|audio\/(webm|mp4|ogg|mpeg|wav)|text\/plain|application\/pdf);base64,/.test(a.url))) throw new Error(`Attach up to ${MAX_ATTACHMENTS} images, voice notes, text files, or PDFs, each up to 5 MB.`);
       id = crypto.randomUUID();
       state.messages.push({ id, conversationId: conversation!.id, author: state.user, text, createdAt: now, reactions: [], attachments: action.attachments ?? [], parentId: action.parentId });
       conversation!.lastMessage = text || `Attachment: ${action.attachments?.[0]?.name}`;

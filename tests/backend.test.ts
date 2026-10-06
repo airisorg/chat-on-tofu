@@ -2,11 +2,53 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { createDemoState, applyDemoAction } from '../src/lib/demo';
-import { publicConfig, readActionBody, authenticatedUser, ChatError, SCHEMA, validateAttachments } from '../src/lib/server';
+import { publicConfig, readActionBody, authenticatedUser, ChatError, SCHEMA, validateAttachments, validateUploadChunk } from '../src/lib/server';
 import type { ChatAction, ChatState } from '../src/lib/types';
 import { PendingSendIds, withRequestDeadline } from '../src/lib/use-chat';
+import { MAX_ACTION_BODY_BYTES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, MAX_UPLOAD_BODY_BYTES, UPLOAD_CHUNK_BYTES } from '../src/lib/media-limits';
+import { uploadAttachments } from '../src/lib/media-upload';
+import { POST as postUploadRoute } from '../src/app/api/uploads/route';
+import { PrivateMediaCache, privateMediaReference } from '../src/lib/media-cache';
+import { GET as getAttachmentRoute } from '../src/app/api/attachments/route';
 
 const anonKey = `e30.${Buffer.from(JSON.stringify({ role: 'anon' })).toString('base64url')}.test-signature`;
+
+test('chunk validation bounds indices, canonical base64, exact binary lengths, and 5 MB metadata', () => {
+  const data = Buffer.alloc(UPLOAD_CHUNK_BYTES).toString('base64');
+  const chunk = { clientMessageId: crypto.randomUUID(), conversationId: crypto.randomUUID(), attachmentIndex: 0, name: 'photo.png', type: 'image/png', size: MAX_ATTACHMENT_BYTES, chunkIndex: 0, totalChunks: 5, data };
+  assert.equal(validateUploadChunk(chunk).data, data);
+  assert.ok(Buffer.byteLength(JSON.stringify(chunk)) < MAX_UPLOAD_BODY_BYTES);
+  for (const change of [{ attachmentIndex: -1 }, { attachmentIndex: 3 }, { chunkIndex: 5 }, { totalChunks: 6 }, { size: MAX_ATTACHMENT_BYTES + 1 }, { data: data + 'AAAA' }, { data: data.slice(4) }, { data: '!!!!' }, { type: 'image/svg+xml' }, { clientMessageId: 'wrong' }]) assert.throws(() => validateUploadChunk({ ...chunk, ...change }), ChatError);
+  const tail = { ...chunk, size: UPLOAD_CHUNK_BYTES + 1, totalChunks: 2, chunkIndex: 1, data: 'AA==' };
+  assert.equal(validateUploadChunk(tail).size, UPLOAD_CHUNK_BYTES + 1);
+  assert.throws(() => validateUploadChunk({ ...tail, data: 'AB==' }), /data/, 'unused padding bits must be canonical');
+});
+
+test('upload route rejects unsigned and cross-origin requests before database access and uses a small body bound', async () => {
+  configure();
+  const unsigned = await postUploadRoute(new Request('https://chat.example.com/api/uploads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }));
+  assert.equal(unsigned.status, 401);
+  const foreign = await postUploadRoute(new Request('https://chat.example.com/api/uploads', { method: 'POST', headers: { Origin: 'https://outside.example', 'Content-Type': 'application/json' }, body: '{}' }));
+  assert.equal(foreign.status, 403);
+  await assert.rejects(readActionBody(new Request('https://chat.example.com/api/uploads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: ' '.repeat(MAX_UPLOAD_BODY_BYTES + 1) }), MAX_UPLOAD_BODY_BYTES), (error: unknown) => error instanceof ChatError && error.status === 413);
+});
+
+test('client media transport bounds every chunk and uses stable final upload references', async () => {
+  const bytes = Buffer.alloc(MAX_ATTACHMENT_BYTES, 23); Buffer.from([137,80,78,71,13,10,26,10]).copy(bytes);
+  const action: Extract<ChatAction, { type: 'send' }> = { type: 'send', text: '', conversationId: crypto.randomUUID(), clientMessageId: crypto.randomUUID(), attachments: [{ name: 'photo.png', type: 'image/png', size: bytes.length, url: `data:image/png;base64,${bytes.toString('base64')}` }] };
+  const chunks: ReturnType<typeof validateUploadChunk>[] = [];
+  const final = await uploadAttachments(action, async chunk => { chunks.push(validateUploadChunk(chunk)); assert.ok(Buffer.byteLength(JSON.stringify(chunk)) < MAX_UPLOAD_BODY_BYTES); }, new AbortController().signal);
+  assert.equal(chunks.length, 5);
+  assert.deepEqual(Buffer.concat(chunks.map(chunk => Buffer.from(chunk.data, 'base64'))), bytes);
+  assert.equal(final.attachments![0].url, `upload:${action.clientMessageId}:0`);
+  assert.ok(JSON.stringify(final).length < 1024);
+  assert.equal(action.attachments![0].url.startsWith('data:'), true, 'draft file data remains intact for retries');
+  let duplicate = 0;
+  await uploadAttachments(action, async chunk => { assert.deepEqual(chunk, chunks[duplicate++]); }, new AbortController().signal);
+  const controller = new AbortController(); let called = 0;
+  await assert.rejects(uploadAttachments(action, async () => { called++; controller.abort(new Error('Offline')); }, controller.signal), /Offline/);
+  assert.equal(called, 1, 'cancellation prevents later chunks and final send');
+});
 function configure() {
   process.env.SUPABASE_URL = 'https://auth.example.com';
   process.env.SUPABASE_ANON_KEY = anonKey;
@@ -41,8 +83,8 @@ test('JSON reader accepts ordinary actions, rejects invalid content, and bounds 
   assert.deepEqual(await readActionBody(request('{"type":"read","conversationId":"test"}')), { type: 'read', conversationId: 'test' });
   await assert.rejects(readActionBody(request('{')), (e: unknown) => e instanceof ChatError && e.status === 400);
   await assert.rejects(readActionBody(request('{}', { 'Content-Type': 'text/plain' })), (e: unknown) => e instanceof ChatError && e.status === 415);
-  await assert.rejects(readActionBody(request('{}', { 'Content-Length': '4300001' })), (e: unknown) => e instanceof ChatError && e.status === 413);
-  await assert.rejects(readActionBody(request(' '.repeat(4_300_001))), (e: unknown) => e instanceof ChatError && e.status === 413);
+  await assert.rejects(readActionBody(request('{}', { 'Content-Length': String(MAX_ACTION_BODY_BYTES + 1) })), (e: unknown) => e instanceof ChatError && e.status === 413);
+  await assert.rejects(readActionBody(request(' '.repeat(MAX_ACTION_BODY_BYTES + 1))), (e: unknown) => e instanceof ChatError && e.status === 413);
 });
 
 test('authentication rejects absent bearer and uses provider-verified identity/email', async () => {
@@ -128,7 +170,7 @@ test('demo rejects foreign edits, cross-conversation threads, invalid invitation
 test('schema keeps chat tables private and enables RLS for every table', () => {
   assert.match(SCHEMA, /CREATE SCHEMA IF NOT EXISTS relay/);
   assert.match(SCHEMA, /REVOKE ALL ON SCHEMA relay FROM PUBLIC/);
-  for (const name of ['profiles','conversations','participants','invites','messages','reactions','stars','events','schema_migrations']) {
+  for (const name of ['profiles','conversations','participants','invites','messages','reactions','stars','events','uploads','schema_migrations']) {
     assert.match(SCHEMA, new RegExp(`CREATE TABLE IF NOT EXISTS relay\\.${name}`));
     assert.match(SCHEMA, new RegExp(`ALTER TABLE relay\\.${name} ENABLE ROW LEVEL SECURITY`));
   }
@@ -153,9 +195,227 @@ test('server accepts safe media signatures and rejects active content, spoofing,
   assert.throws(() => validateAttachments([file('audio/wav', Buffer.from('RIFFxxxxNOTWAVE'))]), /content does not match/);
   assert.throws(() => validateAttachments([file('audio/mpeg', Buffer.from('<script>alert(1)</script>'))]), /content does not match/);
   assert.throws(() => validateAttachments([file('audio/mpeg', Buffer.from([255,224,0,0]))]), /content does not match/);
-  assert.throws(() => validateAttachments([{ ...png, size: 1 }]), /under 1 MB/);
+  assert.throws(() => validateAttachments([{ ...png, size: 1 }]), /up to 5 MB/);
   assert.throws(() => validateAttachments([png,png,png,png]), /up to 3/);
-  assert.throws(() => validateAttachments([file('text/plain', Buffer.alloc(1_048_577))]), /under 1 MB/);
+  assert.throws(() => validateAttachments([file('text/plain', Buffer.alloc(MAX_ATTACHMENT_BYTES + 1))]), /up to 5 MB/);
+});
+
+test('5 MB media boundary accepts actual signatures just below and at the limit, and rejects one byte above', () => {
+  for (const [type, signature] of [
+    ['image/png', Buffer.from([137,80,78,71,13,10,26,10])],
+    ['application/pdf', Buffer.from('%PDF-1.7\n')],
+    ['audio/mp4', Buffer.from([0,0,0,16,102,116,121,112,109,52,97,32])],
+  ] as const) {
+    for (const size of [MAX_ATTACHMENT_BYTES - 1, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_BYTES + 1]) {
+      const bytes = Buffer.alloc(size);
+      signature.copy(bytes);
+      const attachment = { name: 'size-boundary', type, size, url: `data:${type};base64,${bytes.toString('base64')}` };
+      if (size <= MAX_ATTACHMENT_BYTES) assert.equal(validateAttachments([attachment])[0].size, size, `${type} ${size} bytes`);
+      else assert.throws(() => validateAttachments([attachment]), /up to 5 MB/, `${type} one byte above limit`);
+    }
+    const invalid = Buffer.alloc(MAX_ATTACHMENT_BYTES);
+    assert.throws(() => validateAttachments([{ name: 'spoofed-media', type, size: invalid.length, url: `data:${type};base64,${invalid.toString('base64')}` }]), /content does not match/);
+  }
+});
+
+test('three maximum-size attachments fit the bounded JSON request including base64 and UTF-8 metadata', async () => {
+  const bytes = Buffer.alloc(MAX_ATTACHMENT_BYTES);
+  Buffer.from([137,80,78,71,13,10,26,10]).copy(bytes);
+  const attachments = Array.from({ length: MAX_ATTACHMENTS }, (_, index) => ({ name: `image-${index}.png`, type: 'image/png', size: bytes.length, url: `data:image/png;base64,${bytes.toString('base64')}` }));
+  const action = { type: 'send', conversationId: '11111111-1111-4111-8111-111111111111', text: '😀'.repeat(3000), attachments };
+  const body = JSON.stringify(action);
+  assert.equal(Buffer.byteLength(body) > 20 * 1024 * 1024, true, 'binary-to-base64 overhead exceeds 20 MiB');
+  assert.equal(Buffer.byteLength(body) < MAX_ACTION_BODY_BYTES, true);
+  const parsed = await readActionBody(new Request('https://chat.example.com/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })) as typeof action;
+  assert.equal(validateAttachments(parsed.attachments).length, MAX_ATTACHMENTS);
+  assert.equal(parsed.text, action.text);
+});
+
+test('JSON byte limit accepts its exact boundary and cancels an oversized chunked stream even with a false length header', async () => {
+  const exact = '{}'.padEnd(MAX_ACTION_BODY_BYTES);
+  assert.deepEqual(await readActionBody(new Request('https://chat.example.com/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: exact })), {});
+  let cancelled = false;
+  let sent = 0;
+  const chunk = new Uint8Array(1024 * 1024);
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) { controller.enqueue(chunk); if (++sent > 24) controller.close(); },
+    cancel() { cancelled = true; },
+  });
+  const init = { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': '2' }, body: stream, duplex: 'half' } as RequestInit;
+  await assert.rejects(readActionBody(new Request('https://chat.example.com/api/chat', init)), (e: unknown) => e instanceof ChatError && e.status === 413);
+  assert.equal(cancelled, true);
+});
+
+test('demo uses the same inclusive 5 MB limit for picked files and audio', () => {
+  const bytes = Buffer.alloc(MAX_ATTACHMENT_BYTES);
+  const attachment = { name: 'large.txt', type: 'text/plain', size: bytes.length, url: `data:text/plain;base64,${bytes.toString('base64')}` };
+  const result = applyDemoAction(createDemoState(), { type: 'send', conversationId: 'demo-design', text: '', attachments: [attachment] });
+  assert.equal(result.state.messages.at(-1)?.attachments[0].size, MAX_ATTACHMENT_BYTES);
+  assert.throws(() => applyDemoAction(result.state, { type: 'send', conversationId: 'demo-design', text: '', attachments: [{ ...attachment, size: MAX_ATTACHMENT_BYTES + 1 }] }), /up to 5 MB/);
+});
+
+test('private binary endpoint rejects unauthenticated requests before accessing database media', async () => {
+  configure();
+  const response = await getAttachmentRoute(new Request('https://chat.example.com/api/attachments?messageId=11111111-1111-4111-8111-111111111111&index=0'));
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: 'Sign in to continue.' });
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+});
+
+const mediaBytes = Buffer.from([137,80,78,71,13,10,26,10,0]);
+function mediaFixture(count = 1, account = 'account-a'): ChatState {
+  const state = createDemoState();
+  state.user = { ...state.user, id: account };
+  state.messages = Array.from({ length: count }, (_, index) => {
+    const id = `11111111-1111-4111-8111-${String(index + 1).padStart(12, '0')}`;
+    return { ...state.messages[0], id, attachments: [{ name: `${index}.png`, type: 'image/png', size: mediaBytes.length, url: `/api/attachments?messageId=${id}&index=0` }] };
+  });
+  return state;
+}
+function mediaResponse(bytes: Uint8Array = mediaBytes, type = 'image/png') {
+  return new Response(Uint8Array.from(bytes), { headers: { 'Content-Type': type, 'Content-Length': String(bytes.byteLength) } });
+}
+
+test('private media cache stays lazy, deduplicates downloads and reuses object URLs across polling', async () => {
+  let calls = 0;
+  let created = 0;
+  const revoked: string[] = [];
+  const cache = new PrivateMediaCache(async () => { calls++; return mediaResponse(); }, () => {}, { create: () => `blob:fixture-${++created}`, revoke: url => revoked.push(url) });
+  const state = mediaFixture();
+  cache.adopt(state);
+  assert.equal(calls, 0);
+  assert.equal(cache.materialize(state).messages[0].attachments[0].url, '');
+  assert.equal(cache.materialize(state).messages[0].attachments[0].loading, true);
+  const source = state.messages[0].attachments[0].url;
+  await Promise.all([cache.load(source), cache.load(source)]);
+  assert.equal(calls, 1);
+  assert.equal(created, 1);
+  assert.equal(cache.materialize(state).messages[0].attachments[0].url, 'blob:fixture-1');
+  cache.adopt(structuredClone(state));
+  await cache.load(source);
+  assert.equal(calls, 1, 'ordinary polls never re-download a cached file');
+  cache.reset();
+  assert.deepEqual(revoked, ['blob:fixture-1']);
+});
+
+test('private media cache limits download concurrency and releases queued jobs after reset', async () => {
+  const pending: (() => void)[] = [];
+  let calls = 0;
+  const cache = new PrivateMediaCache(() => { calls++; return new Promise(resolve => pending.push(() => resolve(mediaResponse()))); }, () => {}, { create: () => 'blob:fixture', revoke: () => {} });
+  const state = mediaFixture(3);
+  cache.adopt(state);
+  const jobs = state.messages.map(message => cache.load(message.attachments[0].url));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 2);
+  pending.shift()!();
+  await jobs[0];
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 3);
+  cache.reset();
+  await Promise.all(jobs);
+  pending.forEach(resolve => resolve());
+});
+
+test('account reset prevents a late download from repopulating another identity and revokes saved media', async () => {
+  let resolveOld: (response: Response) => void = () => {};
+  let calls = 0;
+  const created: string[] = [];
+  const revoked: string[] = [];
+  const cache = new PrivateMediaCache(() => ++calls === 1 ? new Promise(resolve => { resolveOld = resolve; }) : Promise.resolve(mediaResponse()), () => {}, { create: () => { const url = `blob:fixture-${created.length}`; created.push(url); return url; }, revoke: url => revoked.push(url) });
+  const first = mediaFixture(1, 'account-a');
+  cache.adopt(first);
+  const oldJob = cache.load(first.messages[0].attachments[0].url);
+  await new Promise(resolve => setImmediate(resolve));
+  const second = mediaFixture(1, 'account-b');
+  cache.adopt(second);
+  resolveOld(mediaResponse());
+  await oldJob;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(created.length, 0, 'late private media for the previous account is discarded');
+  await cache.load(second.messages[0].attachments[0].url);
+  assert.equal(calls, 2);
+  assert.equal(created.length, 1);
+  cache.reset();
+  assert.deepEqual(revoked, created);
+});
+
+test('private media errors remain retryable without polling loops and validate MIME and byte lengths', async () => {
+  let calls = 0;
+  let failure = 'status';
+  const cache = new PrivateMediaCache(async () => {
+    calls++;
+    if (failure === 'status') return new Response(null, { status: 503 });
+    if (failure === 'mime') return mediaResponse(mediaBytes, 'text/plain');
+    if (failure === 'size') return mediaResponse(mediaBytes.subarray(0, 3));
+    return mediaResponse();
+  }, () => {}, { create: () => 'blob:fixture', revoke: () => {} });
+  const state = mediaFixture();
+  cache.adopt(state);
+  const source = state.messages[0].attachments[0].url;
+  await cache.load(source);
+  assert.match(cache.materialize(state).messages[0].attachments[0].error!, /retry/);
+  cache.adopt(state);
+  await cache.load(source);
+  assert.equal(calls, 1, 'polling/visibility does not endlessly retry a failed file');
+  for (failure of ['mime', 'size']) {
+    await cache.load(source, true);
+    assert.match(cache.materialize(state).messages[0].attachments[0].error!, /unavailable/);
+  }
+  failure = 'ok';
+  await cache.load(source, true);
+  assert.equal(cache.materialize(state).messages[0].attachments[0].url, 'blob:fixture');
+  cache.adopt({ ...state, messages: [] });
+  cache.reset();
+});
+
+test('media reference parsing never fetches arbitrary hosts or unregistered private URLs', async () => {
+  let calls = 0;
+  const cache = new PrivateMediaCache(async () => { calls++; return mediaResponse(); }, () => {});
+  cache.adopt(mediaFixture());
+  for (const source of ['https://evil.example/file', '//evil.example/file', 'data:image/png;base64,AA==', '/api/attachments?messageId=11111111-1111-4111-8111-000000000002&index=0', '/api/attachments?messageId=11111111-1111-4111-8111-000000000001&index=0&token=bad']) await cache.load(source);
+  assert.equal(calls, 0);
+  assert.equal(privateMediaReference('/api/attachments?messageId=11111111-1111-4111-8111-000000000001&index=3'), undefined);
+  cache.reset();
+});
+
+test('bounded media cache evicts older object URLs and deletes files removed by fresh state', async () => {
+  let created = 0;
+  const revoked: string[] = [];
+  const cache = new PrivateMediaCache(async () => mediaResponse(), () => {}, { create: () => `blob:fixture-${++created}`, revoke: url => revoked.push(url) }, { bytes: 18, files: 2 });
+  const state = mediaFixture(3);
+  cache.adopt(state);
+  for (const message of state.messages) await cache.load(message.attachments[0].url);
+  assert.deepEqual(revoked, ['blob:fixture-1']);
+  assert.match(cache.materialize(state).messages[0].attachments[0].error!, /Retry/);
+  assert.equal(cache.materialize(state).messages[2].attachments[0].url, 'blob:fixture-3');
+  cache.adopt({ ...state, messages: [] });
+  assert.deepEqual(revoked, ['blob:fixture-1', 'blob:fixture-2', 'blob:fixture-3']);
+  cache.reset();
+});
+
+test('evicted visible media requires explicit retry across polls and cache entries stay bounded', async () => {
+  let calls = 0;
+  let created = 0;
+  const cache = new PrivateMediaCache(async () => { calls++; return mediaResponse(); }, () => {}, { create: () => `blob:fixture-${++created}`, revoke: () => {} }, { bytes: 18, files: 2 });
+  const state = mediaFixture(3);
+  cache.adopt(state);
+  for (const message of state.messages) await cache.load(message.attachments[0].url);
+  assert.equal(calls, 3);
+  const evicted = cache.materialize(state).messages[0].attachments[0];
+  assert.equal(evicted.url, '');
+  assert.equal(evicted.loading, false);
+  assert.match(evicted.error!, /cleared from memory/);
+  for (let poll = 0; poll < 3; poll++) {
+    cache.adopt(structuredClone(state));
+    for (const message of state.messages) await cache.load(message.attachments[0].url);
+  }
+  assert.equal(calls, 3, 'visible rows and polling must never automatically re-download an evicted file');
+  assert.equal((cache as unknown as { entries: Map<string, unknown> }).entries.size, 2, 'eviction flags share source metadata; they do not accumulate cached entries');
+  await cache.load(state.messages[0].attachments[0].url, true);
+  assert.equal(calls, 4);
+  assert.equal(cache.materialize(state).messages[0].attachments[0].url, 'blob:fixture-4');
+  assert.equal((cache as unknown as { entries: Map<string, unknown> }).entries.size, 2);
+  cache.reset();
 });
 
 test('auth provider outages preserve sessions while invalid credentials still require sign-in', async () => {

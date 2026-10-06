@@ -1,4 +1,25 @@
-@import url("https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap");
+@font-face {
+  font-family: "Google Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/google-sans-latin-variable.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Roboto";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/roboto-latin-variable.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
+}
 
 :root {
   --shell: #f8fafd;
@@ -14,7 +35,12 @@
   --hover: #e9eef6;
   --green: #188038;
   --danger: #b3261e;
+  --error-bg: #fce8e6;
+  --error-ink: #a5281b;
+  --error-line: #f6c4be;
   --shadow: 0 8px 32px #21324f14;
+  --font-body: "Roboto", Helvetica, Arial, sans-serif;
+  --font-title: "Google Sans", "Roboto", Helvetica, Arial, sans-serif;
   color-scheme: light;
 }
 :root[data-theme="dark"] {
@@ -31,6 +57,9 @@
   --hover: #303640;
   --green: #81c995;
   --danger: #ffb4ab;
+  --error-bg: #4a2524;
+  --error-ink: #ffb4ab;
+  --error-line: #8c3c36;
   --shadow: 0 8px 32px #0003;
   color-scheme: dark;
 }
@@ -43,13 +72,7 @@ body {
   padding: 0;
   background: var(--shell);
   color: var(--ink);
-  font-family:
-    "Google Sans",
-    "Inter",
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+  font-family: var(--font-body);
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
 }
@@ -108,6 +131,28 @@ h2,
 h3,
 p {
   margin: 0;
+}
+h1,
+h2,
+h3,
+.brand,
+.new-chat-button,
+.conversation-title strong,
+.primary-button,
+.text-button,
+.google-button,
+.demo-button,
+.nav-item,
+.sidebar-conversation,
+.sidebar-group-heading,
+.search-box input,
+.mobile-search input,
+.status-button,
+.menu-list,
+.dialog label,
+.kind-tabs,
+.home-filter-tabs {
+  font-family: var(--font-title);
 }
 img {
   display: block;
@@ -328,6 +373,11 @@ button:hover {
   padding: 18px 8px 12px;
   gap: 22px;
 }
+.app-rail > .icon-button {
+  width: 48px;
+  height: 48px;
+  padding: 12px;
+}
 .rail-chat {
   display: flex;
   flex-direction: column;
@@ -441,15 +491,17 @@ button:hover {
   align-items: center;
   display: flex;
   gap: 13px;
-  border-radius: 18px;
+  border-radius: 16px;
   background: var(--blue-soft);
   width: max-content;
-  padding: 0 23px;
+  padding: 0 16px;
   margin: 0 0 21px 7px;
   color: #163454;
   font-size: 14px;
   font-weight: 500;
-  box-shadow: 0 1px 3px #2036540c;
+  box-shadow:
+    0 1px 2px #0000004d,
+    0 1px 3px 1px #00000026;
 }
 .new-chat-button:hover {
   background: var(--selected);
@@ -470,7 +522,10 @@ button:hover {
   gap: 14px;
   color: #303944;
   text-align: left;
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 16px;
+  letter-spacing: normal;
 }
 .nav-item.selected,
 .sidebar-conversation.selected {
@@ -971,8 +1026,8 @@ button:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #d3e3fd;
-  color: #164a83;
+  background: var(--blue-soft);
+  color: var(--blue);
   border-radius: 50%;
   margin-left: 8px;
 }
@@ -1042,9 +1097,10 @@ button:hover {
   padding: 28px 30px 20px;
 }
 .home-header h1 {
-  font-weight: 500;
+  font-weight: 400;
   font-size: 24px;
-  letter-spacing: -0.4px;
+  line-height: 32px;
+  letter-spacing: normal;
   margin-bottom: 7px;
 }
 .home-header p {
@@ -1245,19 +1301,24 @@ button:hover {
   flex: 1;
   min-width: 0;
 }
+.search-result > .avatar,
+.search-result > .space-avatar {
+  flex: 0 0 40px;
+  width: 40px;
+}
 .search-result small {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
 }
 .search-result strong {
   font-weight: 400;
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: 14px;
+  line-height: 20px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .search-result > span > span {
-  font-size: 9px;
+  font-size: 12px;
   color: var(--muted);
 }
 .mobile-search {
@@ -1384,9 +1445,9 @@ button:hover {
   left: 50%;
   transform: translateX(-50%);
   z-index: 101;
-  background: #fce8e6;
-  color: #a5281b;
-  border: 1px solid #f6c4be;
+  background: var(--error-bg);
+  color: var(--error-ink);
+  border: 1px solid var(--error-line);
   padding: 9px 13px;
   border-radius: 12px;
   box-shadow: var(--shadow);
@@ -1488,11 +1549,17 @@ button:hover {
   margin-top: 8px;
 }
 .dialog-footer > .text-button {
-  font-size: 12px;
+  font-size: 14px;
+  min-height: 36px;
+  border-radius: 18px;
+  padding: 0 24px;
 }
 .dialog-footer > .primary-button,
 .dialog-footer > .danger-button {
-  font-size: 12px;
+  font-size: 14px;
+  min-height: 36px;
+  border-radius: 18px;
+  padding: 0 24px;
 }
 .kind-tabs {
   display: flex;
@@ -1503,21 +1570,46 @@ button:hover {
   margin-bottom: 1px;
 }
 .kind-tabs > button {
-  flex: 1;
+  flex: 1 0 auto;
+  white-space: nowrap;
   border-radius: 20px;
   min-height: 38px;
-  font-size: 11px;
+  font-size: 14px;
   padding: 8px 6px;
 }
 .kind-tabs > button.selected {
   background: var(--selected);
-  color: #154664;
+  color: var(--ink);
   font-weight: 500;
+}
+@media (max-width: 767px), (pointer: coarse) {
+  .home-filter-tabs > button {
+    min-width: 44px;
+  }
+  .conversation-intro .text-button {
+    min-height: 44px;
+  }
 }
 .dialog-note {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.8;
+}
+.chat-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.chat-guide p {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+.chat-guide strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--ink);
+  font-weight: 500;
 }
 .profile-summary {
   display: flex;
@@ -1701,13 +1793,20 @@ button:hover {
   flex-direction: column;
   margin: -5px -10px 0;
 }
+.menu-list.support-menu {
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 20px;
+  letter-spacing: 0.2px;
+}
 .menu-list > button {
   display: flex;
   align-items: center;
   gap: 13px;
   min-height: 46px;
   padding: 10px 12px;
-  font-size: 12px;
+  font-size: 14px;
+  line-height: 20px;
   text-align: left;
   border-radius: 10px;
 }
@@ -1897,15 +1996,15 @@ button:hover {
 .google-button {
   width: 100%;
   max-width: 350px;
-  min-height: 51px;
+  min-height: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 13px;
-  border-radius: 28px;
+  border-radius: 16px;
   background: var(--surface);
-  border: 1px solid #cbd0d7;
-  font-size: 13px;
+  border: 1px solid var(--line);
+  font-size: 15px;
   font-weight: 500;
   padding: 12px 20px;
 }
@@ -1932,12 +2031,12 @@ button:hover {
   gap: 12px;
   width: 100%;
   max-width: 350px;
-  min-height: 49px;
-  border-radius: 26px;
-  background: #d3e3fd;
-  font-size: 13px;
+  min-height: 56px;
+  border-radius: 16px;
+  background: var(--blue-soft);
+  font-size: 15px;
   font-weight: 500;
-  color: #214e88;
+  color: var(--blue);
   margin-top: 11px;
 }
 .demo-button:hover {
@@ -1949,12 +2048,27 @@ button:hover {
   gap: 15px;
   margin-top: 30px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 .welcome-benefits > span {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+.welcome-benefits > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  color: var(--blue);
+  background: var(--surface-soft);
+  font-size: 13px;
+}
+.welcome-benefits > button:hover {
+  background: var(--hover);
 }
 .welcome-benefits svg {
   color: #198754;
@@ -1963,7 +2077,7 @@ button:hover {
   position: relative;
   max-width: 530px;
   background: var(--surface);
-  border: 1px solid #fff;
+  border: 1px solid var(--line);
   border-radius: 24px;
   box-shadow: 0 15px 65px #2d416713;
   padding-bottom: 20px;
@@ -2272,6 +2386,9 @@ button:hover {
   }
   .app-shell,
   .app-shell.thread-open {
+    position: fixed;
+    top: var(--app-offset-top, 0px);
+    left: 0;
     display: flex;
     flex-direction: column;
     gap: 0;
@@ -2279,6 +2396,11 @@ button:hover {
     height: var(--app-height, 100dvh);
     width: 100%;
     overflow: hidden;
+  }
+  .dialog-backdrop {
+    top: var(--app-offset-top, 0px);
+    bottom: auto;
+    height: var(--app-height, 100dvh);
   }
   .app-rail,
   .sidebar {
@@ -2340,7 +2462,7 @@ button:hover {
   .home-header h1 {
     font-size: 26px;
     margin-bottom: 7px;
-    letter-spacing: -0.7px;
+    letter-spacing: normal;
   }
   .home-header p {
     font-size: 11px;
@@ -2587,8 +2709,8 @@ button:hover {
     margin-bottom: 9px;
   }
   .conversation-intro p {
-    font-size: 11px;
-    line-height: 1.7;
+    font-size: 14px;
+    line-height: 1.5;
     max-width: 280px;
   }
   .conversation-intro > .space-avatar,
@@ -2597,8 +2719,8 @@ button:hover {
     height: 47px;
   }
   .conversation-intro .text-button {
-    font-size: 11px;
-    min-height: 38px;
+    font-size: 14px;
+    min-height: 44px;
     margin-top: 6px;
   }
   .date-divider {
@@ -2626,15 +2748,15 @@ button:hover {
     flex-wrap: wrap;
   }
   .message-meta strong {
-    font-size: 11px;
+    font-size: 14px;
   }
   .message-meta time,
   .edited {
-    font-size: 9px;
+    font-size: 12px;
   }
   .message-text {
-    font-size: 13px;
-    line-height: 1.7;
+    font-size: 14px;
+    line-height: 1.5;
     max-width: 100%;
     padding-right: 10px;
   }
@@ -2748,6 +2870,8 @@ button:hover {
   .thread-panel {
     position: fixed;
     inset: 0;
+    top: var(--app-offset-top, 0px);
+    bottom: auto;
     margin: 0;
     width: 100%;
     height: var(--app-height, 100dvh);
@@ -2856,7 +2980,7 @@ button:hover {
     font-size: 10px;
   }
   .kind-tabs > button {
-    font-size: 10px;
+    font-size: 14px;
     min-height: 42px;
   }
   .dialog-footer {
@@ -2944,7 +3068,7 @@ button:hover {
   .welcome-header > .brand {
     font-size: 22px;
   }
-  .welcome-header > span {
+  .welcome-header > span:not(.brand) {
     display: none;
   }
   .welcome-content {
@@ -2970,7 +3094,7 @@ button:hover {
     margin-bottom: 20px;
   }
   .welcome-copy > p {
-    font-size: 13px;
+    font-size: 16px;
     line-height: 1.8;
     margin-bottom: 24px;
     max-width: 400px;
@@ -2978,11 +3102,11 @@ button:hover {
   .google-button,
   .demo-button {
     max-width: 100%;
-    min-height: 50px;
-    font-size: 13px;
+    min-height: 56px;
+    font-size: 16px;
   }
   .welcome-copy > .auth-note {
-    font-size: 10px;
+    font-size: 12px;
     margin-top: 12px;
     margin-bottom: 7px;
     max-width: 100%;
@@ -2991,7 +3115,10 @@ button:hover {
   .welcome-benefits {
     gap: 14px 18px;
     margin-top: 23px;
-    font-size: 9px;
+    font-size: 12px;
+  }
+  .welcome-benefits > button {
+    width: 100%;
   }
   .welcome-benefits svg {
     width: 14px;
@@ -3029,14 +3156,14 @@ button:hover {
     margin-right: 18px;
   }
   .preview-message p {
-    font-size: 11px;
+    font-size: 13px;
     line-height: 1.8;
   }
   .preview-message strong {
-    font-size: 10px;
+    font-size: 12px;
   }
   .preview-message small {
-    font-size: 8px;
+    font-size: 10px;
     margin-left: 4px;
   }
   .preview-message > .avatar {
@@ -3068,7 +3195,7 @@ button:hover {
   }
   .welcome-footer {
     padding: 13px 30px 24px;
-    font-size: 9px;
+    font-size: 12px;
     line-height: 1.8;
   }
   .welcome .toast {
@@ -3125,7 +3252,7 @@ button:hover {
     font-size: 31px;
   }
   .welcome-benefits {
-    font-size: 8px;
+    font-size: 12px;
     gap: 9px;
   }
   .preview-space strong {
@@ -3195,7 +3322,7 @@ button:hover {
   width: 36px;
 }
 .brand-demo {
-  font-family: "Inter", sans-serif;
+  font-family: var(--font-body);
 }
 @media (max-width: 799px),
   (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
@@ -3388,6 +3515,21 @@ button:hover {
 }
 
 @media (pointer: coarse) {
+  .dialog-footer > .text-button,
+  .dialog-footer > .primary-button,
+  .dialog-footer > .danger-button,
+  .status-presets > button,
+  .setting-row select {
+    min-height: 44px;
+  }
+  .setting-row select {
+    height: 44px;
+  }
+  .dialog input,
+  .dialog textarea,
+  .setting-row select {
+    font-size: 16px;
+  }
   .icon-button {
     min-width: 44px;
     min-height: 44px;
@@ -3463,14 +3605,29 @@ button:hover {
   color: var(--blue);
 }
 :root[data-theme="dark"] .welcome h1 > span,
-:root[data-theme="dark"] .eyebrow {
+:root[data-theme="dark"] .eyebrow,
+:root[data-theme="dark"] .welcome-benefits > span > svg {
   color: var(--green);
+}
+:root[data-theme="dark"] .welcome-benefits > button > svg,
+:root[data-theme="dark"] .preview-composer > svg:last-child {
+  color: var(--blue);
 }
 :root[data-theme="dark"] .primary-button:hover {
   background: #8ab4f8;
 }
 :root[data-theme="dark"] .danger-button {
   color: #501311;
+}
+:root[data-theme="dark"] .danger-button:hover {
+  background: #ffc9c3;
+}
+:root[data-theme="dark"] .mobile-new-chat {
+  background: var(--blue-soft);
+  color: var(--ink);
+}
+:root[data-theme="dark"] .brand-demo {
+  color: var(--blue);
 }
 @media (max-width: 799px),
   (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
@@ -3560,4 +3717,95 @@ button:hover {
   .row-options {
     top: 10px;
   }
+}
+
+/* Desktop measurements from the reachable Google Chat reference. Compact
+   touch layouts keep their larger controls and keyboard-aware shell. */
+@media (min-width: 800px) and (min-height: 501px),
+  (min-width: 1001px),
+  (min-width: 800px) and (pointer: fine) {
+  .app-shell {
+    grid-template-columns: 0 256px minmax(0, 1fr);
+    grid-template-rows: 64px minmax(0, 1fr);
+  }
+  .app-rail {
+    position: absolute;
+    top: 8px;
+    left: 12px;
+    z-index: 20;
+    padding: 0;
+    width: 48px;
+  }
+  .app-rail > .rail-chat,
+  .app-rail > .rail-bottom {
+    display: none;
+  }
+  .app-topbar {
+    padding-left: 72px;
+  }
+  .app-topbar > .brand,
+  .app-shell.thread-open .app-topbar > .brand {
+    width: 224px;
+  }
+  .sidebar {
+    padding: 2px 20px 0 12px;
+  }
+  .sidebar .new-chat-button {
+    margin: 0 0 40px 4px;
+    background: var(--surface);
+    color: var(--ink);
+  }
+  .sidebar nav {
+    margin-left: 8px;
+    width: 206px;
+    gap: 8px;
+  }
+  .sidebar .nav-item {
+    height: 28px;
+    border-radius: 16px;
+    padding: 0 4px 0 10px;
+  }
+  :root:not([data-theme="dark"]) .sidebar .nav-item.selected {
+    color: #004a77;
+  }
+  .app-shell.thread-open {
+    grid-template-columns: 0 256px minmax(260px, 1fr) 340px;
+  }
+  .app-shell.sidebar-collapsed {
+    grid-template-columns: 0 72px minmax(0, 1fr);
+  }
+  .app-shell.sidebar-collapsed.thread-open {
+    grid-template-columns: 0 72px minmax(260px, 1fr) 340px;
+  }
+  .sidebar-collapsed .sidebar {
+    padding: 2px 8px;
+  }
+  .sidebar-collapsed .sidebar .new-chat-button {
+    font-size: 0;
+    width: 56px;
+    gap: 0;
+    padding: 0;
+    justify-content: center;
+    margin-left: 0;
+  }
+  .sidebar-collapsed .sidebar nav {
+    width: 56px;
+    margin-left: 0;
+  }
+  .sidebar-collapsed .sidebar .nav-item {
+    justify-content: center;
+    padding: 0;
+    height: 44px;
+  }
+  .sidebar-collapsed .nav-item > span,
+  .sidebar-collapsed .sidebar-group,
+  .sidebar-collapsed .sidebar-footer {
+    display: none;
+  }
+}
+@media (min-width: 800px) and (max-width: 1000px) and (min-height: 501px),
+  (min-width: 800px) and (max-width: 1000px) and (pointer: fine) {
+  .app-shell.thread-open { grid-template-columns:0 256px minmax(0,1fr); }
+  .app-shell.sidebar-collapsed.thread-open { grid-template-columns:0 72px minmax(0,1fr); }
+  .thread-panel { top:64px; }
 }

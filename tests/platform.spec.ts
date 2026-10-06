@@ -1,11 +1,43 @@
-import { expect, test, type Page, type Browser } from "@playwright/test";
+import {
+  expect,
+  test,
+  type Page,
+  type Browser,
+  type Locator,
+} from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { deflateSync } from "node:zlib";
 
 // These are local engine/layout simulations, not claims of physical iPhone or
 // installed Safari testing. UA/standalone/visualViewport mocks exercise real UI
 // branches without visiting production or requesting OAuth/microphone access.
 const main = (page: Page) => page.getByRole("main");
+test("phone actions retain usable touch targets", async ({ browser, baseURL }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, serviceWorkers: "block" });
+  try {
+    const page = await context.newPage();
+    await page.route("**/api/config", route => route.fulfill({ json: { supabaseUrl: "", supabaseAnonKey: "", databaseConfigured: false } }));
+    await page.goto(baseURL!);
+    await page.getByRole("button", { name: "Explore demo", exact: true }).click();
+    await page.locator(".app-shell").waitFor();
+    expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+    const all = main(page).locator(".home-filter-tabs").getByRole("button", { name: "All", exact: true });
+    await expect(all).toBeVisible();
+    const allBox = await all.boundingBox();
+    expect(allBox!.width).toBeGreaterThanOrEqual(44); expect(allBox!.height).toBeGreaterThanOrEqual(44);
+    await openDesign(page, true);
+    const addPeople = main(page).locator(".conversation-intro").getByRole("button", { name: "Add people", exact: true });
+    await expect(addPeople).toBeVisible();
+    const addBox = await addPeople.boundingBox();
+    expect(addBox!.width).toBeGreaterThanOrEqual(44); expect(addBox!.height).toBeGreaterThanOrEqual(44);
+    await addPeople.click();
+    const invitation = page.getByRole("dialog", { name: "Add people", exact: true });
+    await expect(invitation).toBeVisible();
+    await expect(invitation.getByRole("textbox", { name: /Email/ })).toBeVisible();
+    await noOverflow(page);
+  } finally { await context.close(); }
+});
 async function demo(page: Page) {
   await page.goto("/");
   await page.getByRole("button", { name: "Explore demo", exact: true }).click();
@@ -19,6 +51,64 @@ async function noOverflow(page: Page) {
   }));
   expect(size.doc).toBeLessThanOrEqual(size.width + 1);
   expect(size.body).toBeLessThanOrEqual(size.width + 1);
+}
+
+async function readable(controls: Locator) {
+  const samples = await controls.evaluateAll((nodes) =>
+    nodes
+      .filter(
+        (n) => n.getBoundingClientRect().width > 0 && !n.matches(":disabled"),
+      )
+      .flatMap((n) => {
+        let parent: Element | null = n;
+        let background = "";
+        while (parent) {
+          const color = getComputedStyle(parent).backgroundColor;
+          if (color !== "rgba(0, 0, 0, 0)" && color !== "transparent") {
+            background = color;
+            break;
+          }
+          parent = parent.parentElement;
+        }
+        const label =
+          n.getAttribute("aria-label") || n.textContent?.trim() || n.tagName;
+        const samples = [
+          { label, foreground: getComputedStyle(n).color, background },
+        ];
+        if (n.matches("input[placeholder], textarea[placeholder]"))
+          samples.push({
+            label: `${label} placeholder`,
+            foreground: getComputedStyle(n, "::placeholder").color,
+            background,
+          });
+        return samples;
+      }),
+  );
+  expect(
+    samples.length,
+    "contrast checks must cover visible controls",
+  ).toBeGreaterThan(0);
+  const luminance = (color: string) => {
+    const rgb = color
+      .match(/[\d.]+/g)!
+      .slice(0, 3)
+      .map(Number)
+      .map((v) => {
+        const channel = v / 255;
+        return channel <= 0.04045
+          ? channel / 12.92
+          : Math.pow((channel + 0.055) / 1.055, 2.4);
+      });
+    return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+  };
+  for (const sample of samples) {
+    const a = luminance(sample.foreground),
+      b = luminance(sample.background);
+    expect(
+      (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05),
+      `${sample.label}: ${sample.foreground} on ${sample.background}`,
+    ).toBeGreaterThanOrEqual(4.5);
+  }
 }
 async function openDesign(page: Page, compact: boolean) {
   if (compact) {
@@ -157,6 +247,31 @@ for (const size of sizes) {
       await page.keyboard.press("Escape");
       await expect(dialog).toHaveCount(0);
       await expect(details).toBeFocused();
+      if (size.touch && !size.compact) {
+        await page
+          .getByRole("banner")
+          .getByRole("button", { name: "Settings", exact: true })
+          .click();
+        const appearance = page
+          .getByRole("dialog")
+          .getByRole("combobox", { name: "Appearance", exact: true });
+        expect((await appearance.boundingBox())!.height).toBeGreaterThanOrEqual(
+          44,
+        );
+        await page.keyboard.press("Escape");
+        await page
+          .getByRole("button", { name: "New chat", exact: true })
+          .click();
+        const targets = await page
+          .getByRole("dialog")
+          .locator(".dialog-footer>button")
+          .evaluateAll((nodes) =>
+            nodes.map((node) => node.getBoundingClientRect().height),
+          );
+        expect(targets.length).toBe(2);
+        for (const height of targets) expect(height).toBeGreaterThanOrEqual(44);
+        await page.keyboard.press("Escape");
+      }
       await noOverflow(page);
     });
   });
@@ -164,6 +279,81 @@ for (const size of sizes) {
 
 const iphone =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+
+test("sign-in landing identifies iPhone, Android and desktop without entering a workspace", async ({
+  browser,
+  baseURL,
+}) => {
+  for (const device of [
+    { ua: iphone, label: "Made for iPhone and iPad", mobile: true },
+    {
+      ua: "Mozilla/5.0 (Linux; Android 17; Pixel 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36",
+      label: "Made for Android",
+      mobile: true,
+    },
+    {
+      ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+      label: "Works in your browser",
+      mobile: false,
+    },
+  ]) {
+    const context = await browser.newContext({
+      baseURL,
+      userAgent: device.ua,
+      viewport: device.mobile
+        ? { width: 390, height: 844 }
+        : { width: 1440, height: 960 },
+      isMobile: device.mobile,
+      hasTouch: device.mobile,
+    });
+    try {
+      const page = await context.newPage();
+      await page.goto("/");
+      const benefits = page.locator(".welcome-benefits");
+      await expect(benefits).toContainText(device.label);
+      if (!device.label.includes("iPhone"))
+        await expect(benefits).not.toContainText("iPhone");
+      if (!device.label.includes("Android"))
+        await expect(benefits).not.toContainText("Android");
+      await expect(
+        page.getByRole("button", { name: "Continue with Google", exact: true }),
+      ).toBeVisible();
+      await expect(page.locator(".app-shell")).toHaveCount(0);
+      await expect(page.locator(".welcome-header .brand")).toBeVisible();
+      const help = page.getByRole("button", {
+        name: "Add to Home Screen",
+        exact: true,
+      });
+      await expect(help).toBeVisible();
+      if (device.mobile) {
+        expect((await help.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+        expect(
+          await page
+            .locator(".welcome-copy > p")
+            .first()
+            .evaluate((node) => parseFloat(getComputedStyle(node).fontSize)),
+        ).toBeGreaterThanOrEqual(16);
+      }
+      await help.click();
+      const installation = page.getByRole("dialog", {
+        name: "Make yourself at home",
+        exact: true,
+      });
+      await expect(installation).toBeVisible();
+      if (device.label.includes("iPhone"))
+        await expect(installation).toContainText("Safari");
+      if (device.label.includes("Android"))
+        await expect(installation).toContainText("Android Home Screen");
+      await page.keyboard.press("Escape");
+      await expect(installation).toHaveCount(0);
+      await expect(help).toBeFocused();
+      await noOverflow(page);
+    } finally {
+      await context.close();
+    }
+  }
+});
+
 async function installPage(
   browser: Browser,
   baseURL: string | undefined,
@@ -280,6 +470,8 @@ test("desktop and Android installation instructions match their platform", async
   await page
     .getByRole("button", { name: "Help and installation", exact: true })
     .click();
+  await page.getByRole("dialog", { name: "Help and support", exact: true })
+    .getByRole("button", { name: "Add to Home Screen", exact: true }).click();
   const dialog = page.getByRole("dialog", {
     name: "Make yourself at home",
     exact: true,
@@ -423,53 +615,192 @@ test("dark theme keeps navigation, brand and composer controls readable", async 
   await expect
     .poll(() => page.locator("html").getAttribute("data-theme"))
     .toBe("dark");
-  const samples = await page
-    .locator(
+  await readable(
+    page.locator(
       ".brand, .nav-item, .new-chat-button, .sidebar-conversation.selected, .composer-controls>.icon-button, .conversation-header-actions>.icon-button",
-    )
-    .evaluateAll((nodes) =>
-      nodes
-        .filter((n) => n.getBoundingClientRect().width > 0)
-        .map((n) => {
-          const style = getComputedStyle(n);
-          let parent: Element | null = n;
-          let background = "";
-          while (parent) {
-            const color = getComputedStyle(parent).backgroundColor;
-            if (color !== "rgba(0, 0, 0, 0)" && color !== "transparent") {
-              background = color;
-              break;
-            }
-            parent = parent.parentElement;
-          }
-          return {
-            label: n.getAttribute("aria-label") || n.textContent?.trim(),
-            foreground: style.color,
-            background,
-          };
-        }),
+    ),
+  );
+});
+
+test("dark mode keeps all new-chat modes, forms, menus, recording errors and destructive controls readable", async ({
+  page,
+}) => {
+  await page.addInitScript(() => localStorage.setItem("relay-theme", "dark"));
+  await demo(page);
+  const forms =
+    "h2, label, input, textarea, select, small, .dialog-note, .kind-tabs>button, .text-button, .primary-button, .icon-button";
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  let dialog = page.getByRole("dialog");
+  for (const mode of ["Direct message", "Group", "Space"]) {
+    await dialog.getByRole("button", { name: mode, exact: true }).click();
+    await expect(dialog.locator(".kind-tabs>button.selected")).toHaveText(mode);
+    await readable(dialog.locator(forms));
+    const field = dialog.locator("input").first();
+    await field.fill("Dark mode typing");
+    await field.focus();
+    await readable(field);
+    const recipient = dialog.getByRole("combobox", {
+      name: /^(To|Add people)/,
+    });
+    await recipient.fill("Maya");
+    await expect(
+      dialog.getByRole("listbox", { name: "Suggested people" }),
+    ).toBeVisible();
+    await readable(
+      dialog.locator(
+        '[role="option"], [role="option"] strong, [role="option"] small',
+      ),
     );
-  const luminance = (color: string) => {
-    const rgb = color
-      .match(/[\d.]+/g)!
-      .slice(0, 3)
-      .map(Number)
-      .map((v) => {
-        const channel = v / 255;
-        return channel <= 0.04045
-          ? channel / 12.92
-          : Math.pow((channel + 0.055) / 1.055, 2.4);
-      });
-    return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
-  };
-  for (const sample of samples) {
-    const a = luminance(sample.foreground),
-      b = luminance(sample.background);
-    expect(
-      (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05),
-      `${sample.label}: ${sample.foreground} on ${sample.background}`,
-    ).toBeGreaterThanOrEqual(4.5);
+    await recipient.fill("unknown-recipient");
+    await dialog
+      .getByRole("button", {
+        name: mode === "Space" ? "Create space" : "Start chat",
+        exact: true,
+      })
+      .click();
+    await expect(dialog.getByRole("alert")).toContainText(
+      "complete email address",
+    );
+    await readable(dialog.getByRole("alert"));
+    await noOverflow(page);
   }
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  dialog = page.getByRole("dialog");
+  await readable(dialog.locator(forms));
+  await expect(
+    dialog.getByRole("combobox", { name: "Appearance" }),
+  ).toHaveValue("dark");
+  await page.keyboard.press("Escape");
+  await page
+    .getByRole("banner")
+    .getByRole("button", { name: "Your profile", exact: true })
+    .click();
+  await readable(
+    page
+      .getByRole("dialog")
+      .locator(`${forms}, .status-presets>button, .profile-summary>strong`),
+  );
+  await page.keyboard.press("Escape");
+
+  await openDesign(page, false);
+  const composer = main(page).getByRole("textbox", {
+    name: "Message",
+    exact: true,
+  });
+  await composer.fill("Dark-mode interaction acceptance");
+  const send = main(page).getByRole("button", {
+    name: "Send message",
+    exact: true,
+  });
+  await send.hover();
+  await readable(
+    main(page).locator(
+      ".composer textarea, .composer-controls>.icon-button, .send-button, .composer-hint",
+    ),
+  );
+  await send.click();
+  const ownMessage = main(page)
+    .getByRole("article")
+    .filter({ hasText: "Dark-mode interaction acceptance" });
+  await ownMessage.hover();
+  await ownMessage
+    .getByRole("button", { name: "More actions", exact: true })
+    .click();
+  await readable(
+    page.getByRole("dialog").locator("h2, .menu-list>button, .icon-button"),
+  );
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Edit message", exact: true })
+    .click();
+  await readable(page.getByRole("dialog").locator(forms));
+  await page
+    .getByRole("dialog")
+    .getByRole("textbox", { name: "Message", exact: true })
+    .fill("Dark-mode message edited");
+  const save = page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Save", exact: true });
+  await save.hover();
+  await readable(save);
+  await save.click();
+  const editedMessage = main(page)
+    .getByRole("article")
+    .filter({ hasText: "Dark-mode message edited" });
+  await editedMessage.hover();
+  await editedMessage
+    .getByRole("button", { name: "More actions", exact: true })
+    .click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Delete message", exact: true })
+    .click();
+  await readable(
+    page
+      .getByRole("dialog")
+      .locator("h2, .dialog-note, .delete-preview, button"),
+  );
+  const deleteButton = page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Delete message", exact: true });
+  await deleteButton.hover();
+  await readable(deleteButton);
+  await page.keyboard.press("Escape");
+
+  await page
+    .getByRole("button", { name: "Conversation details", exact: true })
+    .click();
+  await readable(
+    page
+      .getByRole("dialog")
+      .locator(
+        "h2, h3, .menu-list>button, .dialog-note, .member-list strong, .member-list small, .icon-button",
+      ),
+  );
+  await page.keyboard.press("Escape");
+  await editedMessage.hover();
+  await editedMessage
+    .getByRole("button", { name: "Reply in thread", exact: true })
+    .click();
+  await readable(
+    page
+      .locator(".thread-panel")
+      .locator("h2, textarea, .icon-button, .send-button"),
+  );
+  await page.getByRole("button", { name: "Close thread", exact: true }).click();
+
+  // Reject microphone access locally so the actual recorder error is rendered;
+  // this never requests or grants operating-system microphone permission.
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: async () => {
+          throw new DOMException("Denied for test", "NotAllowedError");
+        },
+      },
+    });
+    if (typeof MediaRecorder === "undefined")
+      Object.defineProperty(window, "MediaRecorder", {
+        configurable: true,
+        value: class {},
+      });
+  });
+  await page
+    .getByRole("button", { name: "Record voice note", exact: true })
+    .click();
+  dialog = page.getByRole("dialog");
+  await readable(dialog.locator("h2, p, small, button"));
+  await dialog
+    .getByRole("button", { name: "Start recording", exact: true })
+    .click();
+  await expect(dialog.getByRole("alert")).toContainText(
+    "Microphone access was denied",
+  );
+  await readable(dialog.locator("h2, p, small, button"));
+  await page.keyboard.press("Escape");
+  await noOverflow(page);
 });
 
 test.describe("landscape keyboard contraction", () => {
@@ -581,14 +912,11 @@ test("real M4A picker alias sends as canonical MP4 audio, decodes and survives r
   expect(fixture.subarray(4, 8).toString("ascii")).toBe("ftyp");
   await demo(page);
   await openDesign(page, false);
-  await page
-    .locator("input[type=file]")
-    .first()
-    .setInputFiles({
-      name: "picker-tone.m4a",
-      mimeType: "audio/x-m4a",
-      buffer: fixture,
-    });
+  await page.locator("input[type=file]").first().setInputFiles({
+    name: "picker-tone.m4a",
+    mimeType: "audio/x-m4a",
+    buffer: fixture,
+  });
   await expect(
     main(page).getByRole("button", {
       name: "Remove picker-tone.m4a",
@@ -623,4 +951,264 @@ test("real M4A picker alias sends as canonical MP4 audio, decodes and survives r
   await expect(
     row.getByRole("link", { name: "picker-tone.m4a", exact: true }),
   ).toHaveAttribute("download", "picker-tone.m4a");
+});
+
+test("a valid PNG at the 5 MB boundary sends and renders; a larger file is rejected", async ({
+  page,
+}) => {
+  // A real one-pixel PNG with a legal private ancillary chunk reaches the
+  // exact file-size boundary without depending on compression or invalid data.
+  const crc = (bytes: Buffer) => {
+    let value = 0xffffffff;
+    for (const byte of bytes) {
+      value ^= byte;
+      for (let bit = 0; bit < 8; bit++)
+        value = (value >>> 1) ^ (value & 1 ? 0xedb88320 : 0);
+    }
+    return (value ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (kind: string, bytes: Buffer) => {
+    const name = Buffer.from(kind);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(bytes.length);
+    const checksum = Buffer.alloc(4);
+    checksum.writeUInt32BE(crc(Buffer.concat([name, bytes])));
+    return Buffer.concat([length, name, bytes, checksum]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(1, 0);
+  header.writeUInt32BE(1, 4);
+  header[8] = 8;
+  header[9] = 2;
+  const start = Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk("IHDR", header),
+    chunk("IDAT", deflateSync(Buffer.from([0, 26, 82, 210]))),
+  ]);
+  const end = chunk("IEND", Buffer.alloc(0));
+  const limit = 5 * 1024 * 1024;
+  const image = Buffer.concat([
+    start,
+    chunk("raNd", Buffer.alloc(limit - start.length - end.length - 12)),
+    end,
+  ]);
+  expect(image.length).toBe(limit);
+  await demo(page);
+  await openDesign(page, false);
+  const picker = page.locator("input[type=file]").first();
+  await picker.setInputFiles({
+    name: "too-large.png",
+    mimeType: "image/png",
+    buffer: Buffer.concat([image, Buffer.from([0])]),
+  });
+  await expect(page.getByRole("status")).toContainText("5 MB or smaller");
+  await expect(
+    page.getByRole("button", { name: "Remove too-large.png", exact: true }),
+  ).toHaveCount(0);
+  await picker.setInputFiles({
+    name: "five-megabyte.png",
+    mimeType: "image/png",
+    buffer: image,
+  });
+  await expect(
+    page.getByRole("button", { name: "Remove five-megabyte.png", exact: true }),
+  ).toBeVisible();
+  await main(page)
+    .getByRole("textbox", { name: "Message", exact: true })
+    .fill("Five megabyte image acceptance");
+  await main(page)
+    .getByRole("button", { name: "Send message", exact: true })
+    .click();
+  const row = main(page)
+    .getByRole("article")
+    .filter({ hasText: "Five megabyte image acceptance" });
+  const rendered = row.getByRole("img", {
+    name: "five-megabyte.png",
+    exact: true,
+  });
+  await expect(rendered).toBeVisible();
+  await expect
+    .poll(() =>
+      rendered.evaluate((node) => (node as HTMLImageElement).naturalWidth),
+    )
+    .toBe(1);
+  await rendered.click();
+  const preview = page.getByRole("dialog");
+  await expect(
+    preview.getByRole("link", { name: "Download original", exact: true }),
+  ).toHaveAttribute("download", "five-megabyte.png");
+});
+
+test("protected media shows text immediately, loads with authorization and recovers through Retry", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  // Invalid, local-only SDK session and routed APIs exercise the real hook.
+  // No real credential, hosted API or identity provider is contacted.
+  const userId = "00000000-0000-4000-8000-000000000111";
+  const conversationId = "00000000-0000-4000-8000-000000000222";
+  const messageId = "00000000-0000-4000-8000-000000000333";
+  const authOrigin = "https://media-fixture.invalid";
+  const now = Math.floor(Date.now() / 1000);
+  const token = [
+    Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString(
+      "base64url",
+    ),
+    Buffer.from(
+      JSON.stringify({
+        sub: userId,
+        role: "authenticated",
+        aud: "authenticated",
+        iat: now,
+        exp: now + 3600,
+      }),
+    ).toString("base64url"),
+    "INVALID_LOCAL_TEST_SIGNATURE",
+  ].join(".");
+  const user = {
+    id: userId,
+    email: "media-test@example.invalid",
+    aud: "authenticated",
+    role: "authenticated",
+    app_metadata: { provider: "google", providers: ["google"] },
+    user_metadata: { full_name: "Local media fixture" },
+    created_at: new Date().toISOString(),
+  };
+  const image = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aT0sAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const state = {
+    user: { id: userId, name: "Local media fixture", email: user.email },
+    conversations: [
+      {
+        id: conversationId,
+        name: "Protected media fixture",
+        kind: "space",
+        members: [
+          { id: userId, name: "Local media fixture", email: user.email },
+        ],
+        unread: 0,
+        updatedAt: new Date().toISOString(),
+      },
+    ],
+    messages: [
+      {
+        id: messageId,
+        conversationId,
+        author: { id: userId, name: "Local media fixture", email: user.email },
+        text: "Text is available while the file loads.",
+        createdAt: new Date().toISOString(),
+        reactions: [],
+        attachments: [
+          {
+            name: "private-image.png",
+            type: "image/png",
+            size: image.length,
+            url: `/api/attachments?messageId=${messageId}&index=0`,
+          },
+        ],
+      },
+    ],
+  };
+  await context.addInitScript(
+    (session) => {
+      localStorage.removeItem("relay-chat-demo-choice-v1");
+      localStorage.setItem("relay-chat-auth-v1", JSON.stringify(session));
+      localStorage.setItem("relay-theme", "dark");
+    },
+    {
+      access_token: token,
+      refresh_token: "INVALID_LOCAL_TEST_REFRESH",
+      token_type: "bearer",
+      expires_in: 3600,
+      expires_at: now + 3600,
+      user,
+    },
+  );
+  await page.routeWebSocket(
+    `${authOrigin.replace("https:", "wss:")}/**`,
+    (socket) => socket.close(),
+  );
+  let attempts = 0;
+  const authorizations: string[] = [];
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await context.route("**/*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.origin === authOrigin && url.pathname === "/auth/v1/user")
+      return route.fulfill({ json: user });
+    if (url.origin !== new URL(baseURL!).origin)
+      return route.abort("blockedbyclient");
+    if (url.pathname === "/api/config")
+      return route.fulfill({
+        json: {
+          supabaseUrl: authOrigin,
+          supabaseAnonKey: "PUBLIC_LOCAL_FIXTURE_ONLY",
+          databaseConfigured: true,
+        },
+      });
+    if (url.pathname === "/api/chat") return route.fulfill({ json: { state } });
+    if (url.pathname === "/api/attachments") {
+      attempts++;
+      authorizations.push(route.request().headers().authorization || "");
+      if (attempts === 1) {
+        await held;
+        return route.fulfill({
+          status: 503,
+          json: { error: "Local fixture unavailable" },
+        });
+      }
+      return route.fulfill({ contentType: "image/png", body: image });
+    }
+    return route.continue();
+  });
+  try {
+    await page.goto("/");
+    await expect(page.locator(".app-shell")).toBeVisible();
+    await page
+      .getByRole("complementary", { name: "Chat navigation" })
+      .getByRole("button", { name: "Protected media fixture", exact: true })
+      .click();
+    const row = main(page)
+      .getByRole("article")
+      .filter({ hasText: "Text is available while the file loads." });
+    await expect(row).toBeVisible();
+    await expect.poll(() => attempts).toBe(1);
+    await expect(row.getByRole("status")).toContainText("Loading attachment");
+    await expect(row.locator("img, audio, a[href] ")).toHaveCount(0);
+    release();
+    const retry = row.getByRole("button", {
+      name: "Retry private-image.png",
+      exact: true,
+    });
+    await expect(retry).toBeVisible();
+    await readable(row.locator("strong, small, button"));
+    await retry.click();
+    const ready = row.getByRole("img", {
+      name: "private-image.png",
+      exact: true,
+    });
+    await expect(ready).toHaveAttribute("src", /^blob:/);
+    await expect
+      .poll(() =>
+        ready.evaluate((node) => (node as HTMLImageElement).naturalWidth),
+      )
+      .toBe(1);
+    expect(attempts).toBe(2);
+    expect(authorizations).toEqual([`Bearer ${token}`, `Bearer ${token}`]);
+    await page
+      .getByRole("button", { name: "Conversation details", exact: true })
+      .click();
+    const shared = page
+      .getByRole("dialog")
+      .getByRole("link", { name: "private-image.png", exact: true });
+    await expect(shared).toHaveAttribute("href", /^blob:/);
+    expect(attempts, "shared files uses the same authenticated cache").toBe(2);
+  } finally {
+    release();
+  }
 });

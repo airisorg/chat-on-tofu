@@ -1,0 +1,146 @@
+.picker {
+  position: relative;
+  margin: 20px 0;
+  font-family: var(--font-title);
+}
+.picker label {
+  margin: 0 0 8px;
+}
+.search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0 12px;
+  color: var(--muted);
+  background: var(--surface);
+}
+.search:focus-within {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+.search input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  padding: 13px 0;
+  font-family: var(--font-title);
+  font-size: 14px;
+  line-height: 20px;
+  letter-spacing: normal;
+  margin: 0;
+}
+.search input:focus {
+  outline: 0;
+  border: 0;
+}
+.picker > small {
+  display: block;
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+.chip {
+  display: flex;
+  align-items: center;
+  max-width: 100%;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--selected);
+  color: var(--ink);
+  padding: 1px 4px 1px 14px;
+}
+.chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chip button {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  border-radius: 50%;
+}
+.suggestions {
+  max-height: 228px;
+  overflow: auto;
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.suggestions button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 64px;
+  text-align: left;
+  padding: 10px 12px;
+  color: var(--ink);
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+}
+.suggestions button.active,
+.suggestions button:hover {
+  background: var(--selected);
+  color: var(--ink);
+}
+.suggestions button > span:nth-child(2) {
+  min-width: 0;
+  flex: 1;
+}
+.suggestions strong,
+.suggestions small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.suggestions small {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 20px;
+  margin-top: 3px;
+}
+.suggestions button.active small,
+.suggestions button:hover small {
+  color: var(--ink);
+}
+.avatar {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  color: var(--ink);
+  background: var(--hover);
+}
+.hint {
+  color: var(--muted);
+  font-size: 13px;
+}
+.error {
+  color: var(--danger);
+  font-size: 14px;
+}
+@media (max-width: 767px), (pointer: coarse) {
+  .search input {
+    font-size: 16px;
+  }
+}

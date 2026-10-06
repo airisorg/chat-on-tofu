@@ -4,27 +4,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createClient, type RealtimeChannel, type Session, type SupabaseClient } from '@supabase/supabase-js';
 import { applyDemoAction, createDemoState, DEMO_STORAGE_KEY } from './demo';
 import type { ChatAction, ChatController, ChatState } from './types';
+import { MAX_DEMO_STORAGE_LENGTH } from './media-limits';
+import { PrivateMediaCache } from './media-cache';
+import { withRequestDeadline } from './request-deadline';
+import { uploadAttachments } from './media-upload';
+export { withRequestDeadline } from './request-deadline';
 
 type Config = { supabaseUrl: string; supabaseAnonKey: string; databaseConfigured: boolean };
 type Mode = 'guest' | 'auth' | 'demo';
 const AUTH_STORAGE_KEY = 'relay-chat-auth-v1';
 const DEMO_CHOICE_KEY = 'relay-chat-demo-choice-v1';
 const DEMO_ALLOWED = process.env.NODE_ENV !== 'production' || process.env.NEXT_PUBLIC_ENABLE_DEMO === 'true';
-
-export async function withRequestDeadline<T>(controller: AbortController, timeoutMs: number, work: () => Promise<T>): Promise<T> {
-  let rejectAbort: (reason: unknown) => void = () => undefined;
-  const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject; });
-  const onAbort = () => rejectAbort(controller.signal.reason ?? new DOMException('Request cancelled.', 'AbortError'));
-  controller.signal.addEventListener('abort', onAbort, { once: true });
-  if (controller.signal.aborted) onAbort();
-  const timer = setTimeout(() => controller.abort(new Error('Connection timed out. Please try again.')), timeoutMs);
-  try {
-    return await Promise.race([Promise.resolve().then(() => { controller.signal.throwIfAborted(); return work(); }), aborted]);
-  } finally {
-    clearTimeout(timer);
-    controller.signal.removeEventListener('abort', onAbort);
-  }
-}
 
 export class PendingSendIds {
   private readonly ids = new Map<string, string>();
@@ -120,8 +110,26 @@ export function useChat(): ChatController {
   const mounted = useRef(false);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const pendingSends = useRef(new PendingSendIds());
+  const wireState = useRef<ChatState | null>(null);
+  const mediaChanged = useRef<() => void>(() => undefined);
+  const mediaCache = useRef<PrivateMediaCache | null>(null);
+  if (!mediaCache.current) mediaCache.current = new PrivateMediaCache(async (source, signal) => {
+    if (!navigator.onLine) throw new Error('You’re offline. Reconnect, then retry this file.');
+    return fetch(source, { signal, cache: 'no-store', headers: { Authorization: `Bearer ${tokenRef.current}` } });
+  }, () => mediaChanged.current());
+  mediaChanged.current = () => {
+    if (!mounted.current || modeRef.current !== 'auth' || !wireState.current || wireState.current.user.id !== identityRef.current) return;
+    const next = mediaCache.current!.materialize(wireState.current);
+    stateRef.current = next;
+    setState(next);
+  };
 
   const publish = useCallback((next: ChatState | null) => {
+    if (next && modeRef.current === 'auth') {
+      wireState.current = next;
+      mediaCache.current!.adopt(next);
+      next = mediaCache.current!.materialize(next);
+    } else wireState.current = null;
     stateRef.current = next;
     if (mounted.current) setState(next);
   }, []);
@@ -140,6 +148,7 @@ export function useChat(): ChatController {
     for (const controller of controllers.current) controller.abort();
     controllers.current.clear();
     pendingSends.current.clear();
+    mediaCache.current?.reset();
     writing.current = false;
     stopRealtime();
     modeRef.current = mode;
@@ -158,11 +167,26 @@ export function useChat(): ChatController {
     const controller = new AbortController();
     controllers.current.add(controller);
     try {
-      return await withRequestDeadline(controller, method === 'GET' ? 8000 : 20000, async () => {
+      const timeout = method === 'GET' ? 8000 : action?.type === 'send' && action.attachments?.length ? 60000 : 20000;
+      return await withRequestDeadline(controller, timeout, async () => {
+      let body = action;
+      if (action?.type === 'send' && action.attachments?.length) body = await uploadAttachments(action, async chunk => {
+        const uploaded = await fetch('/api/uploads', {
+          method: 'POST', cache: 'no-store', signal: controller.signal,
+          headers: { Authorization: `Bearer ${tokenRef.current}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(chunk),
+        });
+        const payload = await uploaded.json() as { ok?: boolean; error?: string };
+        if (!uploaded.ok || payload.ok !== true) {
+          const failure = new Error(payload.error || 'Unable to upload this file. Retry your message.') as Error & { status: number };
+          failure.status = uploaded.status;
+          throw failure;
+        }
+      }, controller.signal);
       const response = await fetch('/api/chat', {
         method, cache: 'no-store', signal: controller.signal,
         headers: { Authorization: `Bearer ${tokenRef.current}`, ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}) },
-        body: action ? JSON.stringify(action) : undefined,
+        body: body ? JSON.stringify(body) : undefined,
       });
       const payload = await response.json() as { state?: ChatState; id?: string; error?: string };
       if (!response.ok) {
@@ -212,7 +236,7 @@ export function useChat(): ChatController {
     let next = createDemoState();
     try {
       const raw = localStorage.getItem(DEMO_STORAGE_KEY);
-      if (raw && raw.length < 5_000_000) {
+      if (raw && raw.length <= MAX_DEMO_STORAGE_LENGTH) {
         const saved = JSON.parse(raw) as ChatState;
         // This key is solely the explicit demo. Never read auth/private chat into it.
         if (saved.user?.id === 'demo-you' && Array.isArray(saved.conversations) && Array.isArray(saved.messages) && saved.conversations.every(c => Array.isArray(c.members)) && saved.messages.every(m => Array.isArray(m.attachments) && Array.isArray(m.reactions) && m.author?.id)) next = saved;
@@ -304,7 +328,10 @@ export function useChat(): ChatController {
     };
     const connectivity = () => {
       setOffline(!navigator.onLine);
-      if (!navigator.onLine) controllers.current.forEach(controller => controller.abort(new Error('You’re offline. Reconnect to continue.')));
+      if (!navigator.onLine) {
+        controllers.current.forEach(controller => controller.abort(new Error('You’re offline. Reconnect to continue.')));
+        mediaCache.current?.abortPending();
+      }
       else { if (!initialized) void initialize(); void sync(); }
     };
     const visibility = () => { if (!document.hidden) void sync(); };
@@ -323,6 +350,7 @@ export function useChat(): ChatController {
       controllers.current.forEach(c => c.abort());
       controllers.current.clear();
       pendingSends.current.clear();
+      mediaCache.current?.reset();
       stopRealtime();
       configureRealtime.current = null;
       unsubscribe?.();
@@ -334,6 +362,14 @@ export function useChat(): ChatController {
       document.removeEventListener('visibilitychange', visibility);
     };
   }, [reset, startDemo, stopRealtime, sync]);
+
+  const loadMedia = useCallback((messageId: string, index: number, retry = false) => {
+    if (modeRef.current !== 'auth' || !wireState.current || wireState.current.user.id !== identityRef.current) return;
+    const file = wireState.current.messages.find(message => message.id === messageId)?.attachments[index];
+    if (file) void mediaCache.current?.load(file.url, retry);
+  }, []);
+  const loadAttachment = useCallback((messageId: string, index: number) => loadMedia(messageId, index), [loadMedia]);
+  const retryAttachment = useCallback((messageId: string, index: number) => loadMedia(messageId, index, true), [loadMedia]);
 
   const action = useCallback((value: ChatAction): Promise<string | undefined> => {
     const start = generation.current;
@@ -403,5 +439,5 @@ export function useChat(): ChatController {
     }
   }, [reset]);
 
-  return { state, loading, error, demo, authAvailable, offline, action, signIn, signOut, startDemo, clearError: useCallback(() => setError(null), []) };
+  return { state, loading, error, demo, authAvailable, offline, action, signIn, signOut, startDemo, loadAttachment, retryAttachment, clearError: useCallback(() => setError(null), []) };
 }

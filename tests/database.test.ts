@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import type { User } from '@supabase/supabase-js';
-import { applySchema, getChat, mutateChat, ChatError } from '../src/lib/server';
+import { applySchema, getChat, mutateChat, getAttachment, attachmentResponse, ChatError, stageUpload, type UploadChunk } from '../src/lib/server';
+import { MAX_ATTACHMENT_BYTES, MAX_HISTORY_PAYLOAD_BYTES, MAX_UPLOAD_BODY_BYTES, UPLOAD_CHUNK_BYTES } from '../src/lib/media-limits';
 
 import { sqlAdapter } from './helpers/pglite-sql';
 function user(id: string, email: string, name: string): User {
@@ -26,7 +27,7 @@ test('real PostgreSQL schema and two-account chat preserve membership and per-us
     assert.equal(observed.length, 3, 'installed schema requires only advisory lock and two metadata reads');
     assert.equal(observed.some(query => /CREATE|ALTER|REVOKE/i.test(query)), false);
     assert.equal((await pg.query('select version from relay.schema_migrations')).rows.length, 1);
-    assert.equal((await pg.query<{ version: number }>('select version from relay.schema_migrations')).rows[0].version, 2);
+    assert.equal((await pg.query<{ version: number }>('select version from relay.schema_migrations')).rows[0].version, 3);
     assert.equal((await pg.query("select * from pg_publication_tables where pubname='supabase_realtime' and schemaname='relay' and tablename='events'")).rows.length, 1);
     assert.deepEqual((await getChat(alice, sql)).conversations, []);
     const created = await mutateChat(alice, { type: 'create', name: 'Bob', kind: 'dm', emails: ['BOB@example.com'] }, sql);
@@ -109,6 +110,133 @@ test('real PostgreSQL schema and two-account chat preserve membership and per-us
   } finally { await pg.close(); }
 });
 
+function uploadChunks(messageId: string, conversationId: string, bytes: Buffer, metadata = { name: 'photo.png', type: 'image/png' }, attachmentIndex = 0): UploadChunk[] {
+  return Array.from({ length: Math.ceil(bytes.length / UPLOAD_CHUNK_BYTES) }, (_, chunkIndex) => ({
+    clientMessageId: messageId, conversationId, attachmentIndex, name: metadata.name, type: metadata.type, size: bytes.length,
+    chunkIndex, totalChunks: Math.ceil(bytes.length / UPLOAD_CHUNK_BYTES),
+    data: bytes.subarray(chunkIndex * UPLOAD_CHUNK_BYTES, (chunkIndex + 1) * UPLOAD_CHUNK_BYTES).toString('base64'),
+  }));
+}
+
+test('durable chunks commit three full-size files atomically and deduplicate a lost final acknowledgement', async () => {
+  const pg = new PGlite(), sql = sqlAdapter(pg, callback => pg.transaction(tx => callback(tx)));
+  const alice = user('11111111-1111-4111-8111-111111111111', 'alice@example.com', 'Alice');
+  const bob = user('22222222-2222-4222-8222-222222222222', 'bob@example.com', 'Bob');
+  try {
+    await applySchema(sql);
+    await getChat(alice, sql);
+    const conversationId = (await mutateChat(alice, { type: 'create', name: 'Bob', kind: 'dm', emails: [bob.email] }, sql)).id!;
+    await getChat(bob, sql);
+    const messageId = crypto.randomUUID();
+    const files = Array.from({ length: 3 }, (_, index) => {
+      const bytes = Buffer.alloc(MAX_ATTACHMENT_BYTES, index + 1); Buffer.from([137,80,78,71,13,10,26,10]).copy(bytes);
+      return { bytes, name: `photo-${index}.png`, type: 'image/png' };
+    });
+    for (let index = 0; index < files.length; index++) {
+      const chunks = uploadChunks(messageId, conversationId, files[index].bytes, files[index], index);
+      for (const chunk of chunks) {
+        assert.ok(Buffer.byteLength(JSON.stringify(chunk)) < MAX_UPLOAD_BODY_BYTES);
+        await stageUpload(alice, chunk, sql);
+        await stageUpload(alice, chunk, sql); // Repeated chunk acknowledgements are immutable.
+      }
+    }
+    assert.equal((await pg.query('select * from relay.uploads')).rows.length, 3);
+    assert.equal((await getChat(bob, sql)).messages.length, 0, 'staging never appears as a message');
+    const attachments = files.map((file, index) => ({ name: file.name, type: file.type, size: file.bytes.length, url: `upload:${messageId}:${index}` }));
+    const action = { type: 'send', clientMessageId: messageId, conversationId, text: 'Three 5 MB files', attachments };
+    const first = await mutateChat(alice, action, sql);
+    assert.equal(first.id, messageId);
+    assert.equal((await pg.query('select * from relay.uploads')).rows.length, 0, 'consumed in the same commit as the message');
+    for (let index = 0; index < files.length; index++) {
+      for (const chunk of uploadChunks(messageId, conversationId, files[index].bytes, files[index], index)) await stageUpload(alice, chunk, sql);
+      assert.deepEqual((await getAttachment(bob, messageId, index, sql)).bytes, files[index].bytes);
+    }
+    const events = (await pg.query('select * from relay.events')).rows.length;
+    await mutateChat(alice, action, sql);
+    assert.equal((await getChat(bob, sql)).messages.length, 1);
+    assert.equal((await pg.query('select * from relay.events')).rows.length, events);
+    assert.equal((await pg.query('select * from relay.uploads')).rows.length, 0, 'retry after commit creates no staging rows');
+    const changed = uploadChunks(messageId, conversationId, Buffer.from(files[0].bytes))[1];
+    const altered = Buffer.from(changed.data, 'base64'); altered[0] ^= 1;
+    await assert.rejects(stageUpload(alice, { ...changed, data: altered.toString('base64') }, sql), (error: unknown) => error instanceof ChatError && error.status === 409);
+    const binary = await getAttachment(bob, messageId, 0, sql);
+    const reader = attachmentResponse(binary.file, binary.bytes).body!.getReader();
+    let streamed = 0, count = 0;
+    while (true) { const part = await reader.read(); if (part.done) break; assert.ok(part.value.length <= 64 * 1024); streamed += part.value.length; count++; }
+    assert.equal(streamed, MAX_ATTACHMENT_BYTES); assert.ok(count > 1, 'large responses are explicit streams');
+  } finally { await pg.close(); }
+});
+
+test('chunk ownership, immutable metadata, expiry, and membership remain private across retries', async () => {
+  const pg = new PGlite(), sql = sqlAdapter(pg, callback => pg.transaction(tx => callback(tx)));
+  const alice = user('11111111-1111-4111-8111-111111111111', 'alice@example.com', 'Alice');
+  const bob = user('22222222-2222-4222-8222-222222222222', 'bob@example.com', 'Bob');
+  const outsider = user('33333333-3333-4333-8333-333333333333', 'outsider@example.com', 'Outsider');
+  try {
+    await pg.exec('CREATE ROLE anon; CREATE ROLE authenticated;');
+    await applySchema(sql); await getChat(alice, sql);
+    const conversationId = (await mutateChat(alice, { type: 'create', name: 'Bob', kind: 'dm', emails: [bob.email] }, sql)).id!;
+    await getChat(bob, sql);
+    const bytes = Buffer.alloc(UPLOAD_CHUNK_BYTES + 17); Buffer.from([137,80,78,71,13,10,26,10]).copy(bytes);
+    const messageId = crypto.randomUUID(), chunks = uploadChunks(messageId, conversationId, bytes);
+    const action = { type: 'send', conversationId, clientMessageId: messageId, text: '', attachments: [{ name: 'photo.png', type: 'image/png', size: bytes.length, url: `upload:${messageId}:0` }] };
+    await stageUpload(alice, chunks[0], sql);
+    await assert.rejects(stageUpload(outsider, chunks[0], sql), (e: unknown) => e instanceof ChatError && e.status === 404);
+    await assert.rejects(stageUpload(bob, chunks[0], sql), (e: unknown) => e instanceof ChatError && e.status === 409);
+    await assert.rejects(mutateChat(bob, action, sql), /incomplete|expired/);
+    await assert.rejects(stageUpload(alice, { ...chunks[0], name: 'different.png' }, sql), (e: unknown) => e instanceof ChatError && e.status === 409);
+    const changed = Buffer.from(chunks[0].data, 'base64'); changed[20] = 17;
+    await assert.rejects(stageUpload(alice, { ...chunks[0], data: changed.toString('base64') }, sql), (e: unknown) => e instanceof ChatError && e.status === 409);
+    await assert.rejects(mutateChat(alice, action, sql), /chunk/);
+    assert.equal((await pg.query('select * from relay.uploads')).rows.length, 1, 'incomplete finalization rolls back consumption');
+    await pg.query("update relay.uploads set expires_at=now()-interval '1 second' where message_id=$1", [messageId]);
+    await assert.rejects(mutateChat(alice, action, sql), /expired/);
+    await stageUpload(alice, chunks[0], sql); await stageUpload(alice, chunks[1], sql);
+    await assert.rejects(mutateChat(alice, { ...action, attachments: [{ ...action.attachments[0], url: `upload:${messageId}:1` }] }, sql), /belong/);
+    const bad = { ...action, parentId: crypto.randomUUID() };
+    await assert.rejects(mutateChat(alice, bad, sql), /no longer available/);
+    assert.equal((await pg.query('select * from relay.uploads')).rows.length, 1, 'later validation failure also rolls back consumption');
+    await mutateChat(alice, action, sql);
+    await assert.rejects(mutateChat(bob, action, sql), (e: unknown) => e instanceof ChatError && e.status === 409);
+    await mutateChat(alice, { type: 'delete', messageId }, sql);
+    await assert.rejects(stageUpload(alice, chunks[0], sql), (e: unknown) => e instanceof ChatError && e.status === 409);
+    await assert.rejects(getAttachment(bob, messageId, 0, sql), (e: unknown) => e instanceof ChatError && e.status === 404);
+    const bobChunk = { ...chunks[0], clientMessageId: crypto.randomUUID() };
+    await stageUpload(bob, bobChunk, sql);
+    await mutateChat(bob, { type: 'leave', conversationId }, sql);
+    assert.equal((await pg.query('select * from relay.uploads where owner_id=$1', [bob.id])).rows.length, 0);
+    await assert.rejects(stageUpload(bob, bobChunk, sql), (e: unknown) => e instanceof ChatError && e.status === 404);
+    for (const role of ['anon', 'authenticated']) {
+      await pg.exec(`SET ROLE ${role}`); await assert.rejects(pg.query('SELECT * FROM relay.uploads'), /permission denied/); await pg.exec('RESET ROLE');
+    }
+  } finally { await pg.close(); }
+});
+
+test('staging reservations stay bounded and migration upgrades preserve existing chat data', async () => {
+  const pg = new PGlite(), sql = sqlAdapter(pg, callback => pg.transaction(tx => callback(tx)));
+  const alice = user('11111111-1111-4111-8111-111111111111', 'alice@example.com', 'Alice');
+  try {
+    await applySchema(sql); await getChat(alice, sql);
+    const conversationId = (await mutateChat(alice, { type: 'create', name: 'Private', kind: 'space', emails: [] }, sql)).id!;
+    const saved = await mutateChat(alice, { type: 'send', conversationId, text: 'Preserve this message' }, sql);
+    await pg.exec('DROP TABLE relay.uploads; DELETE FROM relay.schema_migrations; INSERT INTO relay.schema_migrations(version) VALUES(2);');
+    await applySchema(sql); await applySchema(sql);
+    assert.equal((await getChat(alice, sql)).messages[0].id, saved.id);
+    assert.deepEqual((await pg.query<{ version: number }>('select version from relay.schema_migrations order by version')).rows.map(row => row.version), [2, 3]);
+    const bytes = Buffer.alloc(MAX_ATTACHMENT_BYTES); Buffer.from([137,80,78,71,13,10,26,10]).copy(bytes);
+    for (let index = 0; index < 4; index++) await stageUpload(alice, uploadChunks(crypto.randomUUID(), conversationId, bytes)[0], sql);
+    await assert.rejects(stageUpload(alice, uploadChunks(crypto.randomUUID(), conversationId, bytes)[0], sql), (e: unknown) => e instanceof ChatError && e.status === 429);
+    assert.equal((await pg.query<{ count: number; bytes: number }>('select count(*)::integer as count,sum(size)::integer as bytes from relay.uploads')).rows[0].bytes, 20 * 1024 * 1024);
+    await pg.exec("update relay.uploads set expires_at=now()-interval '1 second'");
+    await stageUpload(alice, uploadChunks(crypto.randomUUID(), conversationId, bytes)[0], sql);
+    assert.equal((await pg.query('select * from relay.uploads')).rows.length, 1, 'expired reservations are deleted during the next valid upload');
+    await pg.exec('delete from relay.uploads');
+    const tiny = Buffer.from('safe text');
+    for (let index = 0; index < 6; index++) await stageUpload(alice, uploadChunks(crypto.randomUUID(), conversationId, tiny, { name: 'tiny.txt', type: 'text/plain' })[0], sql);
+    await assert.rejects(stageUpload(alice, uploadChunks(crypto.randomUUID(), conversationId, tiny, { name: 'tiny.txt', type: 'text/plain' })[0], sql), (e: unknown) => e instanceof ChatError && e.status === 429);
+  } finally { await pg.close(); }
+});
+
 test('stable client message IDs deduplicate lost acknowledgements and reject foreign or changed payloads', async () => {
   const pg = new PGlite();
   const sql = sqlAdapter(pg, callback => pg.transaction(tx => callback(tx)));
@@ -145,5 +273,64 @@ test('stable client message IDs deduplicate lost acknowledgements and reject for
     const legacyTwo = await mutateChat(alice, legacy, sql);
     assert.notEqual(legacyOne.id, legacyTwo.id);
     assert.equal((await getChat(alice, sql)).messages.length, 4);
+  } finally { await pg.close(); }
+});
+
+test('full-size media stays private, downloads for both members, and polling only returns metadata', async () => {
+  const pg = new PGlite();
+  const sql = sqlAdapter(pg, callback => pg.transaction(tx => callback(tx)));
+  const alice = user('11111111-1111-4111-8111-111111111111', 'alice@example.com', 'Alice');
+  const bob = user('22222222-2222-4222-8222-222222222222', 'bob@example.com', 'Bob');
+  const outsider = user('33333333-3333-4333-8333-333333333333', 'outsider@example.com', 'Outsider');
+  const file = (name: string, type: string, signature: Buffer) => {
+    const bytes = Buffer.alloc(MAX_ATTACHMENT_BYTES);
+    signature.copy(bytes);
+    return { name, type, size: bytes.length, url: `data:${type};base64,${bytes.toString('base64')}` };
+  };
+  try {
+    await applySchema(sql);
+    await getChat(alice, sql);
+    const conversation = await mutateChat(alice, { type: 'create', name: 'Bob', kind: 'dm', emails: [bob.email] }, sql);
+    await getChat(bob, sql);
+    const png = file('full-size.png', 'image/png', Buffer.from([137,80,78,71,13,10,26,10]));
+    const first = await mutateChat(alice, { type: 'send', conversationId: conversation.id, text: 'One full-size file', attachments: [png] }, sql);
+    const single = (await getChat(bob, sql)).messages.find(message => message.id === first.id)!;
+    assert.equal(single.attachments[0].size, MAX_ATTACHMENT_BYTES);
+    assert.equal(single.attachments[0].url, `/api/attachments?messageId=${first.id}&index=0`);
+    const binary = await getAttachment(bob, first.id, 0, sql);
+    assert.equal(binary.bytes.length, MAX_ATTACHMENT_BYTES);
+    assert.deepEqual(binary.bytes.subarray(0, 8), Buffer.from([137,80,78,71,13,10,26,10]));
+    const response = attachmentResponse(binary.file, binary.bytes);
+    assert.equal(response.headers.get('content-type'), 'image/png');
+    assert.equal(response.headers.get('content-length'), String(MAX_ATTACHMENT_BYTES));
+    assert.match(response.headers.get('cache-control')!, /private, no-store/);
+    assert.equal(response.headers.get('vary'), 'Authorization');
+    assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal((await response.arrayBuffer()).byteLength, MAX_ATTACHMENT_BYTES);
+    const files = [png, file('full-size.pdf', 'application/pdf', Buffer.from('%PDF-1.7\n')), file('full-size.m4a', 'audio/mp4', Buffer.from([0,0,0,16,102,116,121,112,109,52,97,32]))];
+    const bundle = await mutateChat(alice, { type: 'send', conversationId: conversation.id, text: 'Three full-size files', attachments: files }, sql);
+    assert.equal(bundle.state.messages.find(message => message.id === bundle.id)?.attachments.length, 3);
+    const newest = await mutateChat(bob, { type: 'send', conversationId: conversation.id, text: 'Received them' }, sql);
+    const state = await getChat(alice, sql);
+    assert.deepEqual(state.messages.map(message => message.id), [first.id, bundle.id, newest.id]);
+    assert.deepEqual(state.messages[1].attachments.map(({ name, type, size }) => ({ name, type, size })), files.map(({ name, type, size }) => ({ name, type, size })));
+    for (let index = 0; index < files.length; index++) {
+      assert.equal(state.messages[1].attachments[index].url, `/api/attachments?messageId=${bundle.id}&index=${index}`);
+      assert.equal((await getAttachment(bob, bundle.id, String(index), sql)).bytes.length, MAX_ATTACHMENT_BYTES);
+    }
+    assert.equal((await getChat(bob, sql)).messages[1].attachments.every(attachment => attachment.size === MAX_ATTACHMENT_BYTES), true);
+    const payload = state.messages.reduce((sum, message) => sum + Buffer.byteLength(JSON.stringify(message.attachments)) + Buffer.byteLength(message.text) + 300, 0);
+    assert.equal(payload < MAX_HISTORY_PAYLOAD_BYTES, true);
+    assert.equal(JSON.stringify(state).length < 10000, true, 'four full-size media files must not inflate polling responses');
+    assert.equal(JSON.stringify(state).includes('base64,'), false);
+    assert.equal((await getChat(outsider, sql)).messages.length, 0, 'larger files never weaken membership isolation');
+    await assert.rejects(getAttachment(outsider, bundle.id, 0, sql), (e: unknown) => e instanceof ChatError && e.status === 404);
+    for (const index of [-1, 3, 1.2, '0;SELECT', null]) await assert.rejects(getAttachment(alice, bundle.id, index, sql), (e: unknown) => e instanceof ChatError && e.status === 404);
+    await assert.rejects(getAttachment(alice, first.id, 2, sql), (e: unknown) => e instanceof ChatError && e.status === 404);
+    await mutateChat(alice, { type: 'delete', messageId: first.id }, sql);
+    await assert.rejects(getAttachment(alice, first.id, 0, sql), (e: unknown) => e instanceof ChatError && e.status === 404);
+    await mutateChat(bob, { type: 'leave', conversationId: conversation.id }, sql);
+    await assert.rejects(getAttachment(bob, bundle.id, 0, sql), (e: unknown) => e instanceof ChatError && e.status === 404);
+    assert.equal((await getAttachment(alice, bundle.id, 0, sql)).bytes.length, MAX_ATTACHMENT_BYTES);
   } finally { await pg.close(); }
 });

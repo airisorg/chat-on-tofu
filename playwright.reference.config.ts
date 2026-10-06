@@ -1,22 +1,16 @@
 import { defineConfig } from "@playwright/test";
 const baseURL = process.env.APP_URL || "http://127.0.0.1:3000";
 if (!["127.0.0.1", "localhost", "[::1]"].includes(new URL(baseURL).hostname))
-  throw new Error("Platform checks require a local server.");
+  throw new Error("Reference interaction checks require a local server.");
 export default defineConfig({
   testDir: "./tests",
-  testMatch: [
-    "**/platform.spec.ts",
-    "**/recipients.spec.ts",
-    "**/keyboard.spec.ts",
-    "**/popovers.spec.ts",
-  ],
+  testMatch: ["**/presence-support.spec.ts", "**/fonts.spec.ts"],
   timeout: 30000,
   expect: { timeout: 7000 },
-  fullyParallel: false,
   workers: 2,
   retries: 0,
   reporter: "list",
-  outputDir: "../../work/qa/platform-test-results",
+  outputDir: "../../work/qa/presence-support-results",
   use: {
     baseURL,
     viewport: { width: 1440, height: 960 },

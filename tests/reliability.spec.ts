@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { expect, test, type BrowserContext, type Page, type Route } from '@playwright/test';
 import type { ChatAction, ChatState, Message, Person } from '../src/lib/types';
+import type { UploadChunk } from '../src/lib/server';
 
 // These browser regressions exercise the authenticated hook through fake SDK
 // session storage and routed localhost APIs. No real account, credential,
 // hosted endpoint, database, or realtime provider is used. The mock server's
-// dedupe model tests the client's request contract, not production SQL dedupe.
+// dedupe/assembly model tests the client's request contract, not production
+// SQL ownership, reservation limits, expiry or atomic chunk consumption.
 const baseURL = process.env.APP_URL || 'http://127.0.0.1:3000';
 const appOrigin = new URL(baseURL).origin;
 if (!['127.0.0.1', 'localhost'].includes(new URL(baseURL).hostname)) {
@@ -40,9 +43,22 @@ class ChatApiFixture {
   releasedGets = 0;
   failedGetRequests: string[] = [];
   sends: Send[] = [];
+  uploads: UploadChunk[] = [];
+  transportRequests: { path: string; bytes: number }[] = [];
+  unauthenticatedUploadRequests = 0;
+  failChunkOnce: number | null = null;
+  holdNextUploadResponse = false;
+  mediaRequests = 0;
+  unauthenticatedMediaRequests = 0;
+  mediaMode: 'ok' | 'outage' | 'hold-next' = 'ok';
   loseNextSendResponse = false;
+  holdNextSendResponse = false;
   private held: (() => void)[] = [];
+  private heldMedia: (() => void)[] = [];
+  private heldSend: (() => void)[] = [];
+  private heldUpload: (() => void)[] = [];
   private sendsById = new Map<string, { payload: string; id: string }>();
+  private staged = new Map<string, { descriptor: string; chunks: Map<number, Buffer> }>();
 
   addPeerMessage(text: string) {
     const message: Message = {
@@ -58,6 +74,78 @@ class ChatApiFixture {
     this.held.splice(0).forEach(release => release());
   }
 
+  addPeerFile(name: string, bytes: Buffer, type = 'image/png') {
+    const id = this.addPeerMessage('A private attachment is available.');
+    this.state.messages.find(message => message.id === id)!.attachments = [{ name, type, size: bytes.length, url: `data:${type};base64,${bytes.toString('base64')}` }];
+    return id;
+  }
+
+  private publicState() {
+    const state = structuredClone(this.state);
+    for (const message of state.messages) message.attachments = message.attachments.map((file, index) => ({ ...file, url: `/api/attachments?messageId=${message.id}&index=${index}` }));
+    return state;
+  }
+
+  releaseMedia() { this.heldMedia.splice(0).forEach(release => release()); }
+  releaseSend() { this.heldSend.splice(0).forEach(release => release()); }
+  releaseUpload() { this.heldUpload.splice(0).forEach(release => release()); }
+
+  private transportSize(route: Route) {
+    const bytes = route.request().postDataBuffer()?.length || 0;
+    this.transportRequests.push({ path: new URL(route.request().url()).pathname, bytes });
+    return bytes <= 2 * 1024 * 1024;
+  }
+
+  async upload(route: Route) {
+    if (!this.transportSize(route)) return route.fulfill({ status: 413, json: { error: 'Local fixture transport body exceeded 2 MiB.' } });
+    const chunk = route.request().postDataJSON() as UploadChunk;
+    this.uploads.push(structuredClone(chunk));
+    if (!uuid.test(chunk.clientMessageId) || chunk.conversationId !== conversationId || !Number.isInteger(chunk.attachmentIndex) || chunk.attachmentIndex < 0) {
+      return route.fulfill({ status: 400, json: { error: 'Local upload identity is invalid.' } });
+    }
+    if (this.failChunkOnce === chunk.chunkIndex) {
+      this.failChunkOnce = null;
+      return route.fulfill({ status: 503, json: { error: 'Temporary local chunk outage. Retry your message.' } });
+    }
+    const bytes = Buffer.from(chunk.data, 'base64');
+    const chunkBytes = 1024 * 1024;
+    const expectedBytes = Math.min(chunkBytes, chunk.size - chunk.chunkIndex * chunkBytes);
+    if (bytes.toString('base64') !== chunk.data || bytes.length !== expectedBytes || expectedBytes < 1 || chunk.totalChunks !== Math.ceil(chunk.size / chunkBytes)) {
+      return route.fulfill({ status: 400, json: { error: 'Local upload chunk shape is invalid.' } });
+    }
+    const key = `${userId}:${chunk.clientMessageId}:${chunk.attachmentIndex}`;
+    const descriptor = JSON.stringify({ conversationId: chunk.conversationId, name: chunk.name, type: chunk.type, size: chunk.size, totalChunks: chunk.totalChunks });
+    const staged = this.staged.get(key) || { descriptor, chunks: new Map<number, Buffer>() };
+    const previous = staged.chunks.get(chunk.chunkIndex);
+    if (staged.descriptor !== descriptor || (previous && !previous.equals(bytes))) {
+      return route.fulfill({ status: 409, json: { error: 'Local upload reservation cannot be mutated.' } });
+    }
+    staged.chunks.set(chunk.chunkIndex, bytes);
+    this.staged.set(key, staged);
+    if (this.holdNextUploadResponse) {
+      this.holdNextUploadResponse = false;
+      await new Promise<void>(resolve => this.heldUpload.push(resolve));
+    }
+    try { return await route.fulfill({ status: 200, json: { ok: true } }); }
+    catch { /* One shared send deadline may cancel an already-staged chunk. */ }
+  }
+
+  async media(route: Route) {
+    this.mediaRequests++;
+    if (this.mediaMode === 'outage') return route.fulfill({ status: 503, json: { error: 'Local media fixture outage.' } });
+    if (this.mediaMode === 'hold-next') {
+      this.mediaMode = 'ok';
+      await new Promise<void>(resolve => this.heldMedia.push(resolve));
+    }
+    const query = new URL(route.request().url()).searchParams;
+    const file = this.state.messages.find(message => message.id === query.get('messageId'))?.attachments[Number(query.get('index'))];
+    if (!file) return route.fulfill({ status: 404, json: { error: 'File unavailable.' } });
+    const bytes = Buffer.from(file.url.slice(file.url.indexOf(',') + 1), 'base64');
+    try {
+      return await route.fulfill({ status: 200, headers: { 'Content-Type': file.type, 'Content-Length': String(bytes.length), 'Cache-Control': 'private, no-store' }, body: bytes });
+    } catch { /* A cancelled browser download has already been aborted. */ }
+  }
+
   async get(route: Route) {
     this.getCount++;
     if (this.getMode === 'outage') {
@@ -66,7 +154,7 @@ class ChatApiFixture {
     }
     if (this.getMode === 'hold-next') {
       this.getMode = 'ok';
-      const snapshot = structuredClone(this.state);
+      const snapshot = this.publicState();
       this.heldGets++;
       await new Promise<void>(resolve => this.held.push(resolve));
       try {
@@ -76,14 +164,28 @@ class ChatApiFixture {
       return;
     }
     this.successfulGets++;
-    return route.fulfill({ status: 200, json: { state: this.state } });
+    return route.fulfill({ status: 200, json: { state: this.publicState() } });
   }
 
   async post(route: Route) {
+    if (!this.transportSize(route)) return route.fulfill({ status: 413, json: { error: 'Local fixture transport body exceeded 2 MiB.' } });
     const action = route.request().postDataJSON() as ChatAction;
-    if (action.type !== 'send') return route.fulfill({ status: 200, json: { state: this.state } });
+    if (action.type !== 'send') return route.fulfill({ status: 200, json: { state: this.publicState() } });
     const send = structuredClone(action) as Send;
     this.sends.push(send);
+    const attachments: NonNullable<Send['attachments']> = [];
+    for (const [index, file] of (send.attachments || []).entries()) {
+      const key = `${userId}:${send.clientMessageId}:${index}`;
+      const staged = this.staged.get(key);
+      const chunks = Math.ceil(file.size / (1024 * 1024));
+      const descriptor = JSON.stringify({ conversationId: send.conversationId, name: file.name, type: file.type, size: file.size, totalChunks: chunks });
+      if (file.url !== `upload:${send.clientMessageId}:${index}` || !staged || staged.chunks.size !== chunks || staged.descriptor !== descriptor) {
+        return route.fulfill({ status: 409, json: { error: 'Local upload is incomplete or owned by another send.' } });
+      }
+      const bytes = Buffer.concat(Array.from({ length: chunks }, (_, chunk) => staged.chunks.get(chunk)!));
+      if (bytes.length !== file.size) return route.fulfill({ status: 409, json: { error: 'Local upload size did not match.' } });
+      attachments.push({ ...file, url: `data:${file.type};base64,${bytes.toString('base64')}` });
+    }
     const logicalPayload = JSON.stringify({
       conversationId: send.conversationId, text: send.text.trim(),
       parentId: send.parentId || null, attachments: send.attachments || [],
@@ -96,18 +198,24 @@ class ChatApiFixture {
     if (!previous) {
       this.state.messages.push({
         id, conversationId: send.conversationId, author: this.state.user, text: send.text.trim(),
-        parentId: send.parentId, attachments: send.attachments || [],
+        parentId: send.parentId, attachments,
         createdAt: new Date().toISOString(), reactions: [],
       });
       if (send.clientMessageId) this.sendsById.set(send.clientMessageId, { payload: logicalPayload, id });
       this.state.conversations[0].lastMessage = send.text.trim();
     }
+    (send.attachments || []).forEach((_, index) => this.staged.delete(`${userId}:${send.clientMessageId}:${index}`));
     if (this.loseNextSendResponse) {
       this.loseNextSendResponse = false;
       // The fixture has committed above, but the browser receives no response.
       return route.abort('connectionreset');
     }
-    return route.fulfill({ status: 200, json: { state: this.state, id } });
+    if (this.holdNextSendResponse) {
+      this.holdNextSendResponse = false;
+      await new Promise<void>(resolve => this.heldSend.push(resolve));
+    }
+    try { return await route.fulfill({ status: 200, json: { state: this.publicState(), id } }); }
+    catch { /* A deadline may have aborted this already-committed request. */ }
   }
 }
 
@@ -155,6 +263,20 @@ async function authenticatedFixture(page: Page, context: BrowserContext) {
         return route.fulfill({ status: 401, json: { error: 'The local fixture session was not restored.' } });
       }
       return request.method() === 'GET' ? fixture.get(route) : fixture.post(route);
+    }
+    if (url.pathname === '/api/attachments') {
+      if (request.headers().authorization !== `Bearer ${fakeToken}`) {
+        fixture.unauthenticatedMediaRequests++;
+        return route.fulfill({ status: 401, json: { error: 'This file requires the local fixture session.' } });
+      }
+      return fixture.media(route);
+    }
+    if (url.pathname === '/api/uploads') {
+      if (request.headers().authorization !== `Bearer ${fakeToken}`) {
+        fixture.unauthenticatedUploadRequests++;
+        return route.fulfill({ status: 401, json: { error: 'Local chunk upload requires the fixture session.' } });
+      }
+      return fixture.upload(route);
     }
     return route.continue();
   });
@@ -307,4 +429,238 @@ test('intentional repeated successful identical messages receive new IDs', async
   expect(fixture.sends[1].clientMessageId).toMatch(uuid);
   expect(fixture.sends[1].clientMessageId).not.toBe(fixture.sends[0].clientMessageId);
   expect(new Set(fixture.state.messages.filter(message => message.text === text).map(message => message.id)).size).toBe(2);
+});
+
+test('visible private media uses bearer fetch once per session and survives subsequent metadata polls', async ({ page, context }) => {
+  const fixture = await authenticatedFixture(page, context);
+  const name = 'local-private-picture.png';
+  fixture.addPeerFile(name, readFileSync('public/icons/icon-192.png'));
+  await triggerSync(page);
+  const image = page.getByAltText(name, { exact: true });
+  await expect(image).toBeVisible();
+  await expect.poll(() => image.evaluate(element => (element as HTMLImageElement).naturalWidth)).toBe(192);
+  const source = await image.getAttribute('src');
+  expect(source).toMatch(/^blob:/);
+  expect(fixture.mediaRequests).toBe(1);
+  expect(fixture.unauthenticatedMediaRequests).toBe(0);
+  const getsBefore = fixture.successfulGets;
+  await triggerSync(page);
+  await expect.poll(() => fixture.successfulGets).toBeGreaterThan(getsBefore);
+  await expect(image).toHaveAttribute('src', source!);
+  expect(fixture.mediaRequests).toBe(1);
+  await page.reload();
+  await expect(image).toBeVisible();
+  await expect.poll(() => image.evaluate(element => (element as HTMLImageElement).naturalWidth)).toBe(192);
+  expect(fixture.mediaRequests, 'relaunch downloads through auth again; private binaries are never persisted').toBe(2);
+  expect(fixture.unauthenticatedMediaRequests).toBe(0);
+});
+
+test('failed private media retries explicitly while text and ordinary polls keep working', async ({ page, context }) => {
+  const fixture = await authenticatedFixture(page, context);
+  const name = 'retry-private-picture.png';
+  fixture.mediaMode = 'outage';
+  fixture.addPeerFile(name, readFileSync('public/icons/icon-192.png'));
+  await triggerSync(page);
+  await expect(page.getByRole('button', { name: `Retry ${name}`, exact: true })).toBeVisible();
+  expect(fixture.mediaRequests).toBe(1);
+  const getsBefore = fixture.successfulGets;
+  fixture.addPeerMessage('Text keeps refreshing while a file is unavailable.');
+  await triggerSync(page);
+  await expect.poll(() => fixture.successfulGets).toBeGreaterThan(getsBefore);
+  await expect(page.getByRole('article').filter({ hasText: 'Text keeps refreshing while a file is unavailable.' })).toBeVisible();
+  expect(fixture.mediaRequests, 'polling does not loop failed downloads').toBe(1);
+  fixture.mediaMode = 'ok';
+  await page.getByRole('button', { name: `Retry ${name}`, exact: true }).click();
+  await expect(page.getByAltText(name, { exact: true })).toBeVisible();
+  expect(fixture.mediaRequests).toBe(2);
+  expect(fixture.unauthenticatedMediaRequests).toBe(0);
+});
+
+test('a pending media download does not block text updates and is discarded on sign-out', async ({ page, context }) => {
+  const fixture = await authenticatedFixture(page, context);
+  const name = 'pending-private-picture.png';
+  fixture.mediaMode = 'hold-next';
+  fixture.addPeerFile(name, readFileSync('public/icons/icon-192.png'));
+  try {
+    await triggerSync(page);
+    await expect.poll(() => fixture.mediaRequests).toBe(1);
+    await expect(page.getByAltText(name, { exact: true })).toHaveCount(0);
+    fixture.addPeerMessage('A new text message arrives before the file download finishes.');
+    await triggerSync(page);
+    await expect(page.getByRole('article').filter({ hasText: 'A new text message arrives before the file download finishes.' })).toBeVisible();
+    await page.getByRole('button', { name: 'Your profile', exact: true }).first().click();
+    await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Continue with Google', exact: true })).toBeVisible();
+    fixture.releaseMedia();
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(page.getByAltText(name, { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('article')).toHaveCount(0);
+    expect(fixture.unauthenticatedMediaRequests).toBe(0);
+  } finally { fixture.releaseMedia(); }
+});
+
+test('a 5 MB image upload renders through protected binary download and reloads correctly', async ({ page, context }) => {
+  const fixture = await authenticatedFixture(page, context);
+  const bytes = Buffer.alloc(5 * 1024 * 1024);
+  readFileSync('public/icons/icon-192.png').copy(bytes);
+  const name = 'full-size-local-image.png';
+  await page.locator('input[type="file"]').setInputFiles({ name, mimeType: 'image/png', buffer: bytes });
+  await expect(page.getByRole('button', { name: `Remove ${name}`, exact: true })).toBeVisible();
+  await page.getByRole('main').getByRole('button', { name: 'Send message', exact: true }).click();
+  const image = page.getByAltText(name, { exact: true });
+  await expect(image).toBeVisible();
+  await expect.poll(() => image.evaluate(element => (element as HTMLImageElement).naturalWidth)).toBe(192);
+  expect(fixture.sends[0].attachments?.[0].size).toBe(bytes.length);
+  expect(fixture.uploads.map(chunk => chunk.chunkIndex)).toEqual([0, 1, 2, 3, 4]);
+  expect(fixture.uploads.every(chunk => chunk.totalChunks === 5 && chunk.clientMessageId === fixture.sends[0].clientMessageId)).toBe(true);
+  expect(fixture.sends[0].attachments?.[0].url).toBe(`upload:${fixture.sends[0].clientMessageId}:0`);
+  const committed = fixture.state.messages.find(message => message.id === fixture.sends[0].clientMessageId)!.attachments[0];
+  expect(Buffer.from(committed.url.split(',')[1], 'base64').equals(bytes), 'assembled download retains every binary byte').toBe(true);
+  expect(fixture.transportRequests).toHaveLength(6);
+  expect(fixture.transportRequests.every(request => request.bytes <= 2 * 1024 * 1024), 'every upload and final-send request fits the 2 MiB transport budget').toBe(true);
+  expect(fixture.transportRequests.find(request => request.path === '/api/chat')!.bytes, 'final send contains metadata only').toBeLessThan(1024);
+  expect(fixture.unauthenticatedUploadRequests).toBe(0);
+  expect(await image.getAttribute('src')).toMatch(/^blob:/);
+  expect(fixture.mediaRequests).toBe(1);
+  await page.reload();
+  await expect(image).toBeVisible();
+  await expect.poll(() => image.evaluate(element => (element as HTMLImageElement).naturalWidth)).toBe(192);
+  expect(fixture.mediaRequests).toBe(2);
+  expect(fixture.unauthenticatedMediaRequests).toBe(0);
+});
+
+test('a failed later chunk retains text and file; retry reuses its send ID and identical chunks', async ({ page, context }) => {
+  const fixture = await authenticatedFixture(page, context);
+  const bytes = Buffer.alloc(2 * 1024 * 1024 + 17, 0x6a);
+  readFileSync('public/icons/icon-192.png').copy(bytes);
+  const name = 'retry-chunk-picture.png';
+  const text = 'The saved attachment draft survives a partial upload.';
+  const main = page.getByRole('main');
+  fixture.failChunkOnce = 1;
+  await page.locator('input[type="file"]').setInputFiles({ name, mimeType: 'image/png', buffer: bytes });
+  await main.getByRole('textbox', { name: 'Message', exact: true }).fill(text);
+  await main.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect.poll(() => fixture.uploads.length).toBe(2);
+  await expect(main.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled();
+  await expect(main.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue(text);
+  await expect(page.getByRole('button', { name: `Remove ${name}`, exact: true })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'Temporary local chunk outage.' })).toBeVisible();
+  expect(fixture.sends).toHaveLength(0);
+  const original = fixture.uploads[0];
+  expect(original.clientMessageId).toMatch(uuid);
+  await main.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(main.getByRole('article').filter({ hasText: text })).toHaveCount(1);
+  await expect(main.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('');
+  expect(fixture.uploads.map(chunk => chunk.chunkIndex)).toEqual([0, 1, 0, 1, 2]);
+  expect(fixture.uploads[2]).toEqual(original);
+  expect(fixture.uploads.every(chunk => chunk.clientMessageId === original.clientMessageId)).toBe(true);
+  expect(fixture.sends).toHaveLength(1);
+  expect(fixture.sends[0].clientMessageId).toBe(original.clientMessageId);
+  expect(fixture.state.messages.filter(message => message.text === text)).toHaveLength(1);
+  const file = fixture.state.messages.find(message => message.text === text)!.attachments[0];
+  expect(Buffer.from(file.url.split(',')[1], 'base64').equals(bytes)).toBe(true);
+  expect(fixture.transportRequests.every(request => request.bytes <= 2 * 1024 * 1024)).toBe(true);
+  expect(fixture.unauthenticatedUploadRequests).toBe(0);
+  await expectAccountRetained(page);
+});
+
+test('lost final attachment ack retries chunks with the same ID and commits only one message', async ({ page, context }) => {
+  const fixture = await authenticatedFixture(page, context);
+  const bytes = readFileSync('public/icons/icon-192.png');
+  const name = 'lost-ack-picture.png';
+  const text = 'A committed attachment has one identity after its response is lost.';
+  const main = page.getByRole('main');
+  fixture.loseNextSendResponse = true;
+  await page.locator('input[type="file"]').setInputFiles({ name, mimeType: 'image/png', buffer: bytes });
+  await main.getByRole('textbox', { name: 'Message', exact: true }).fill(text);
+  await main.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect.poll(() => fixture.sends.length).toBe(1);
+  await expect(main.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: `Remove ${name}`, exact: true })).toBeVisible();
+  await main.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect.poll(() => fixture.sends.length).toBe(2);
+  await expect(main.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('');
+  expect(fixture.uploads).toHaveLength(2);
+  expect(fixture.uploads[1]).toEqual(fixture.uploads[0]);
+  expect(fixture.sends[1].clientMessageId).toBe(fixture.sends[0].clientMessageId);
+  expect(fixture.state.messages.filter(message => message.text === text)).toHaveLength(1);
+  await expect(main.getByRole('article').filter({ hasText: text })).toHaveCount(1);
+  await expect.poll(() => page.getByAltText(name, { exact: true }).evaluate(element => (element as HTMLImageElement).naturalWidth)).toBe(192);
+});
+
+test('a hung private media download reaches its 60-second deadline and Retry recovers', async ({ page, context }) => {
+  await page.clock.install();
+  const fixture = await authenticatedFixture(page, context);
+  const name = 'deadline-private-picture.png';
+  fixture.mediaMode = 'hold-next';
+  fixture.addPeerFile(name, readFileSync('public/icons/icon-192.png'));
+  try {
+    await triggerSync(page);
+    await expect.poll(() => fixture.mediaRequests).toBe(1);
+    await page.clock.fastForward(60_100);
+    await expect(page.getByRole('button', { name: `Retry ${name}`, exact: true })).toBeVisible();
+    await expectAccountRetained(page);
+    await page.getByRole('button', { name: `Retry ${name}`, exact: true }).click();
+    await expect(page.getByAltText(name, { exact: true })).toBeVisible();
+    expect(fixture.mediaRequests).toBe(2);
+    expect(fixture.unauthenticatedMediaRequests).toBe(0);
+  } finally { fixture.releaseMedia(); }
+});
+
+test('attachment POST gets a bounded 60-second deadline and retains its draft after timeout', async ({ page, context }) => {
+  await page.clock.install();
+  const fixture = await authenticatedFixture(page, context);
+  const name = 'slow-upload-local-picture.png';
+  fixture.holdNextSendResponse = true;
+  try {
+    await page.locator('input[type="file"]').setInputFiles({ name, mimeType: 'image/png', buffer: readFileSync('public/icons/icon-192.png') });
+    const sendButton = page.getByRole('main').getByRole('button', { name: 'Send message', exact: true });
+    await sendButton.click();
+    await expect.poll(() => fixture.sends.length).toBe(1);
+    expect(fixture.uploads).toHaveLength(1);
+    expect(fixture.sends[0].attachments?.[0].url).toBe(`upload:${fixture.sends[0].clientMessageId}:0`);
+    await page.clock.fastForward(20_100);
+    await expect(sendButton).toBeDisabled();
+    await page.clock.fastForward(40_100);
+    await expect(sendButton).toBeEnabled();
+    await expect(page.getByRole('button', { name: `Remove ${name}`, exact: true })).toBeVisible();
+    await expect(page.getByRole('alert').filter({ hasText: 'Connection timed out. Please try again.' })).toBeVisible();
+    expect(fixture.sends[0].clientMessageId).toMatch(uuid);
+    await expectAccountRetained(page);
+  } finally { fixture.releaseSend(); }
+});
+
+test('one 60-second deadline bounds the whole chunk sequence and Retry recovers', async ({ page, context }) => {
+  await page.clock.install();
+  const fixture = await authenticatedFixture(page, context);
+  const bytes = Buffer.alloc(2 * 1024 * 1024);
+  readFileSync('public/icons/icon-192.png').copy(bytes);
+  const name = 'shared-deadline-picture.png';
+  const sendButton = page.getByRole('main').getByRole('button', { name: 'Send message', exact: true });
+  fixture.holdNextUploadResponse = true;
+  try {
+    await page.locator('input[type="file"]').setInputFiles({ name, mimeType: 'image/png', buffer: bytes });
+    await sendButton.click();
+    await expect.poll(() => fixture.uploads.length).toBe(1);
+    await page.clock.fastForward(40_000);
+    await expect(sendButton).toBeDisabled();
+    fixture.holdNextUploadResponse = true;
+    fixture.releaseUpload();
+    await expect.poll(() => fixture.uploads.length).toBe(2);
+    await page.clock.fastForward(20_100);
+    await expect(sendButton).toBeEnabled();
+    await expect(page.getByRole('alert').filter({ hasText: 'Connection timed out. Please try again.' })).toBeVisible();
+    await expect(page.getByRole('button', { name: `Remove ${name}`, exact: true })).toBeVisible();
+    expect(fixture.sends).toHaveLength(0);
+    const originalId = fixture.uploads[0].clientMessageId;
+    fixture.releaseUpload();
+    await sendButton.click();
+    await expect.poll(() => fixture.sends.length).toBe(1);
+    await expect(page.getByAltText(name, { exact: true })).toBeVisible();
+    expect(fixture.uploads.map(chunk => chunk.chunkIndex)).toEqual([0, 1, 0, 1]);
+    expect(fixture.uploads.every(chunk => chunk.clientMessageId === originalId)).toBe(true);
+    expect(fixture.sends[0].clientMessageId).toBe(originalId);
+    expect(fixture.transportRequests.every(request => request.bytes <= 2 * 1024 * 1024)).toBe(true);
+    await expectAccountRetained(page);
+  } finally { fixture.releaseUpload(); }
 });

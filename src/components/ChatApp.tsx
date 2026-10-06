@@ -50,9 +50,22 @@ import {
   CheckCheck,
 } from "lucide-react";
 import { useChat } from "@/lib/use-chat";
+import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from "@/lib/media-limits";
 import VoiceRecorder from "./VoiceRecorder";
 import InstallHelp from "./InstallHelp";
-import { isCompactViewport } from "./platform";
+import ContextPopover from "./ContextPopover";
+import MediaAttachment from "./MediaAttachment";
+import SearchFilters from "./SearchFilters";
+import {
+  DEFAULT_SEARCH_FILTERS,
+  hasSearchFilters,
+  searchLoadedMessages,
+  type SearchFilters as SearchValues,
+} from "@/lib/search";
+import NewConversationForm, {
+  type NewConversation,
+} from "./NewConversationForm";
+import { isCompactViewport, installPlatform } from "./platform";
 import type {
   Attachment,
   ChatAction,
@@ -62,16 +75,20 @@ import type {
 } from "@/lib/types";
 
 type View =
-  | "home"
-  | "direct"
-  | "spaces"
-  | "mentions"
-  | "starred"
-  | "sections"
-  | "search";
+  "home" | "direct" | "spaces" | "mentions" | "starred" | "sections" | "search";
 type Modal =
   | { type: "new"; kind: Conversation["kind"] }
-  | { type: "settings" | "profile" | "install" | "more" | "voice" }
+  | {
+      type:
+        | "settings"
+        | "profile"
+        | "install"
+        | "more"
+        | "voice"
+        | "status"
+        | "support"
+        | "guide";
+    }
   | {
       type: "conversation" | "invite" | "about" | "leave";
       conversation: Conversation;
@@ -209,12 +226,16 @@ function IconButton({
   className = "",
   onClick,
   disabled = false,
+  expanded,
+  controls,
 }: {
   label: string;
   children: ReactNode;
   className?: string;
   onClick?: () => void;
   disabled?: boolean;
+  expanded?: boolean;
+  controls?: string;
 }) {
   return (
     <button
@@ -224,6 +245,8 @@ function IconButton({
       title={label}
       onClick={onClick}
       disabled={disabled}
+      aria-expanded={expanded}
+      aria-controls={controls}
     >
       {children}
     </button>
@@ -234,14 +257,21 @@ function Dialog({
   children,
   onClose,
   wide = false,
+  contextual = false,
+  anchor,
+  formPopover = false,
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
   wide?: boolean;
+  contextual?: boolean;
+  anchor?: HTMLElement | null;
+  formPopover?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    if (contextual) return;
     const previous = document.activeElement as HTMLElement;
     const dialog = ref.current;
     const nodes = () =>
@@ -273,7 +303,18 @@ function Dialog({
       document.removeEventListener("keydown", key);
       previous?.focus();
     };
-  }, [onClose, title]);
+  }, [onClose, title, contextual]);
+  if (contextual)
+    return (
+      <ContextPopover
+        title={title}
+        anchor={anchor}
+        onClose={onClose}
+        variant={formPopover ? "form" : "menu"}
+      >
+        {children}
+      </ContextPopover>
+    );
   return (
     <div
       className="dialog-backdrop"
@@ -311,9 +352,18 @@ export default function ChatApp() {
   const [query, setQuery] = useState("");
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [pinnedOnly, setPinnedOnly] = useState(false);
+  const [threadsOnly, setThreadsOnly] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [directExpanded, setDirectExpanded] = useState(true);
+  const [spacesExpanded, setSpacesExpanded] = useState(true);
+  const [compactViewport, setCompactViewport] = useState(false);
   const [searchScope, setSearchScope] = useState<string | null>(null);
+  const [searchFilters, setSearchFilters] = useState<SearchValues>(
+    DEFAULT_SEARCH_FILTERS,
+  );
   const [jumpTarget, setJumpTarget] = useState<string | null>(null);
   const atBottom = useRef(true);
+  const threadAtBottom = useRef(true);
   const [modal, setModal] = useState<Modal>(null);
   const [draft, setDraft] = useState("");
   const [threadDraft, setThreadDraft] = useState("");
@@ -324,17 +374,40 @@ export default function ChatApp() {
   const [theme, setTheme] = useState("system");
   const [themeReady, setThemeReady] = useState(false);
   const [requestedInvitation, setRequestedInvitation] = useState("");
+  const [landingDeviceLabel, setLandingDeviceLabel] = useState(
+    "Works in your browser",
+  );
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<
     (Event & { prompt: () => Promise<void> }) | null
   >(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const threadScrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const threadComposerRef = useRef<HTMLTextAreaElement>(null);
   const previousUser = useRef<string | null>(null);
   const closeModal = useCallback(() => setModal(null), []);
+  const menuAnchor = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const update = () => setCompactViewport(isCompactViewport());
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+  async function installApp() {
+    if (!installPrompt) return;
+    try {
+      await installPrompt.prompt();
+    } catch {
+      setToast(
+        "Installation did not complete. You can use your browser menu to try again.",
+      );
+    } finally {
+      setInstallPrompt(null);
+    }
+  }
   const draftMap = useRef<
     Record<string, { text: string; attachments: Attachment[] }>
   >({});
@@ -357,6 +430,14 @@ export default function ChatApp() {
     ),
   ];
   useEffect(() => {
+    const platform = installPlatform();
+    setLandingDeviceLabel(
+      platform === "android"
+        ? "Made for Android"
+        : platform === "ios-safari" || platform === "ios-other"
+          ? "Made for iPhone and iPad"
+          : "Works in your browser",
+    );
     try {
       const saved = localStorage.getItem("relay-theme");
       if (saved && ["system", "light", "dark"].includes(saved)) setTheme(saved);
@@ -421,6 +502,7 @@ export default function ChatApp() {
     setQuery("");
     setSearchScope(null);
     setJumpTarget(null);
+    setSearchFilters(DEFAULT_SEARCH_FILTERS);
     setEmojiOpen(false);
     setModal(null);
     if (userId && state) {
@@ -532,8 +614,29 @@ export default function ChatApp() {
       if (atBottom.current) scroller.scrollTop = scroller.scrollHeight;
     });
     observer.observe(scroller);
+    for (const child of scroller.children) observer.observe(child);
     return () => observer.disconnect();
-  }, [selectedId]);
+  }, [selectedId, messages.length]);
+  useEffect(() => {
+    threadAtBottom.current = true;
+    const scroller = threadScrollRef.current;
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+  }, [threadId]);
+  useEffect(() => {
+    const scroller = threadScrollRef.current;
+    if (scroller && threadAtBottom.current)
+      scroller.scrollTop = scroller.scrollHeight;
+  }, [replies.length]);
+  useEffect(() => {
+    const scroller = threadScrollRef.current;
+    if (!scroller) return;
+    const observer = new ResizeObserver(() => {
+      if (threadAtBottom.current) scroller.scrollTop = scroller.scrollHeight;
+    });
+    observer.observe(scroller);
+    for (const child of scroller.children) observer.observe(child);
+    return () => observer.disconnect();
+  }, [threadId, replies.length]);
   useEffect(() => {
     if (!jumpTarget || !selectedId) return;
     const timer = window.setTimeout(() => {
@@ -597,6 +700,7 @@ export default function ChatApp() {
     setEmojiOpen(false);
     setQuery("");
     setSearchScope(null);
+    setSearchFilters(DEFAULT_SEARCH_FILTERS);
     if (conversation.unread)
       run({ type: "read", conversationId: conversation.id });
   }
@@ -606,8 +710,10 @@ export default function ChatApp() {
     setThreadId(null);
     setQuery("");
     setSearchScope(null);
+    setSearchFilters(DEFAULT_SEARCH_FILTERS);
     setUnreadOnly(false);
     setPinnedOnly(false);
+    setThreadsOnly(false);
   }
   async function send(inThread = false) {
     const text = inThread ? threadDraft : draft;
@@ -618,7 +724,8 @@ export default function ChatApp() {
     )
       return;
     setSending(true);
-    atBottom.current = true;
+    if (inThread) threadAtBottom.current = true;
+    else atBottom.current = true;
     try {
       await act({
         type: "send",
@@ -632,7 +739,7 @@ export default function ChatApp() {
         setDraft("");
         setAttachments([]);
       }
-      composerRef.current?.focus();
+      (inThread ? threadComposerRef.current : composerRef.current)?.focus();
     } catch {
     } finally {
       setSending(false);
@@ -664,12 +771,12 @@ export default function ChatApp() {
           : rawType === "audio/x-wav"
             ? "audio/wav"
             : rawType;
-      if (f.size > 1024 * 1024) {
-        setToast(`${f.name} is too large. Choose a file under 1 MB.`);
+      if (f.size > MAX_ATTACHMENT_BYTES) {
+        setToast(`${f.name} is too large. Choose a file 5 MB or smaller.`);
         continue;
       }
-      if (attachments.length + incoming.length >= 3) {
-        setToast("You can attach up to 3 files per message.");
+      if (attachments.length + incoming.length >= MAX_ATTACHMENTS) {
+        setToast(`You can attach up to ${MAX_ATTACHMENTS} files per message.`);
         break;
       }
       if (
@@ -725,15 +832,25 @@ export default function ChatApp() {
         await copyInvitation(conversation);
     }
   }
-  async function submitNew(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (modal?.type !== "new") return;
-    const data = new FormData(e.currentTarget);
-    const kind = modal.kind;
-    const name = String(data.get("name") || "").trim();
-    const emails = String(data.get("emails") || "")
-      .split(/[,\s]+/)
-      .filter(Boolean);
+  async function submitNew(conversation: NewConversation) {
+    const { kind, name, emails, description } = conversation;
+    const existing =
+      kind === "dm"
+        ? state?.conversations.find(
+            (item) =>
+              item.kind === "dm" &&
+              item.members.some(
+                (person) =>
+                  person.id !== state.user.id &&
+                  person.email.toLowerCase() === emails[0]?.toLowerCase(),
+              ),
+          )
+        : undefined;
+    if (existing) {
+      setModal(null);
+      openConversation(existing);
+      return;
+    }
     setBusy(true);
     try {
       const id = await act({
@@ -741,7 +858,7 @@ export default function ChatApp() {
         name,
         kind,
         emails,
-        description: String(data.get("description") || ""),
+        description,
       });
       setModal(null);
       if (id) {
@@ -824,60 +941,19 @@ export default function ChatApp() {
               <div className="message-text">{message.text}</div>
               {message.attachments.length > 0 && (
                 <div className="message-attachments">
-                  {message.attachments.map((attachment, i) =>
-                    attachment.type.startsWith("audio/") ? (
-                      <div className="audio-attachment" key={i}>
-                        <audio
-                          controls
-                          preload="metadata"
-                          src={attachment.url}
-                          aria-label={`Play ${attachment.name}`}
-                        />
-                        <a href={attachment.url} download={attachment.name}>
-                          <Mic size={14} />
-                          {attachment.name}
-                          <ArrowDownToLine size={14} />
-                        </a>
-                      </div>
-                    ) : (
-                      <a
-                        key={i}
-                        href={attachment.url}
-                        download={attachment.name}
-                        aria-haspopup={
-                          attachment.type.startsWith("image/")
-                            ? "dialog"
-                            : undefined
-                        }
-                        onClick={
-                          attachment.type.startsWith("image/")
-                            ? (e) => {
-                                e.preventDefault();
-                                setModal({ type: "attachment", attachment });
-                              }
-                            : undefined
-                        }
-                        className={
-                          attachment.type.startsWith("image/")
-                            ? "image-attachment"
-                            : "file-attachment"
-                        }
-                      >
-                        {attachment.type.startsWith("image/") ? (
-                          <img src={attachment.url} alt={attachment.name} />
-                        ) : (
-                          <File size={21} />
-                        )}
-                        <span>
-                          {attachment.name}
-                          <small>
-                            {Math.max(1, Math.round(attachment.size / 1024))} KB
-                            · Download
-                          </small>
-                        </span>
-                      </a>
-                    ),
-                  )}
+                  {message.attachments.map((attachment, i) => (
+                    <MediaAttachment
+                      key={i}
+                      attachment={attachment}
+                      messageId={message.id}
+                      index={i}
+                      onLoad={chat.loadAttachment}
+                      onRetry={chat.retryAttachment}
+                      onPreview={(attachment) =>
+                        setModal({ type: "attachment", attachment })
+                      }
+                    />
+                  ))}
                 </div>
               )}
               {message.reactions.length > 0 && (
@@ -1057,11 +1133,17 @@ export default function ChatApp() {
                 <Check size={16} /> Messages & spaces
               </span>
               <span>
-                <Check size={16} /> Made for iPhone
+                <Check size={16} /> {landingDeviceLabel}
               </span>
-              <span>
-                <Check size={16} /> Install to Home Screen
-              </span>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.currentTarget.focus({ preventScroll: true });
+                  setModal({ type: "install" });
+                }}
+              >
+                <Smartphone size={20} /> Add to Home Screen
+              </button>
             </div>
           </div>
           <div className="welcome-preview">
@@ -1132,6 +1214,14 @@ export default function ChatApp() {
           Your conversations are private to this app.
         </footer>
         {toastUI}
+        {modal?.type === "install" && (
+          <Dialog title="Make yourself at home" onClose={closeModal}>
+            <InstallHelp
+              canInstall={Boolean(installPrompt)}
+              onInstall={installApp}
+            />
+          </Dialog>
+        )}
       </main>
     );
 
@@ -1153,24 +1243,55 @@ export default function ChatApp() {
         Number(!!b.pinned) - Number(!!a.pinned) ||
         new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
     );
-  const foundMessages = state.messages.filter(
-    (m) =>
-      !m.deleted &&
-      (!searchScope || m.conversationId === searchScope) &&
-      (!unreadOnly ||
-        state.conversations.some(
-          (c) => c.id === m.conversationId && c.unread > 0,
-        )) &&
-      (view === "starred"
-        ? m.starred
-        : view === "mentions"
-          ? m.text.toLowerCase().includes("@all") ||
-            m.text
-              .toLowerCase()
-              .includes(`@${state.user.name.split(" ")[0].toLowerCase()}`) ||
-            m.text.toLowerCase().includes(`@${state.user.email.toLowerCase()}`)
-          : query && m.text.toLowerCase().includes(query.toLowerCase())),
-  );
+  const activeSearchFilters = {
+    ...searchFilters,
+    conversationId: searchScope || "",
+  };
+  const foundMessages =
+    view === "search"
+      ? searchLoadedMessages({
+          messages: state.messages,
+          conversations: state.conversations,
+          user: state.user,
+          query,
+          filters: activeSearchFilters,
+        }).filter(
+          (message) =>
+            !unreadOnly ||
+            state.conversations.some(
+              (conversation) =>
+                conversation.id === message.conversationId &&
+                conversation.unread > 0,
+            ),
+        )
+      : state.messages.filter(
+          (m) =>
+            !m.deleted &&
+            (!searchScope || m.conversationId === searchScope) &&
+            (!unreadOnly ||
+              state.conversations.some(
+                (c) => c.id === m.conversationId && c.unread > 0,
+              )) &&
+            (view === "home" && threadsOnly
+              ? !m.parentId &&
+                state.messages.some(
+                  (reply) => reply.parentId === m.id && !reply.deleted,
+                )
+              : view === "starred"
+                ? m.starred
+                : view === "mentions"
+                  ? m.text.toLowerCase().includes("@all") ||
+                    m.text
+                      .toLowerCase()
+                      .includes(
+                        `@${state.user.name.split(" ")[0].toLowerCase()}`,
+                      ) ||
+                    m.text
+                      .toLowerCase()
+                      .includes(`@${state.user.email.toLowerCase()}`)
+                  : query &&
+                    m.text.toLowerCase().includes(query.toLowerCase())),
+        );
   const navItems: {
     view: View;
     icon: ReactNode;
@@ -1252,7 +1373,7 @@ export default function ChatApp() {
                 <Mic size={21} />
               </IconButton>
               <IconButton
-                label="Attach files (up to 1 MB each)"
+                label="Attach files (up to 5 MB each)"
                 onClick={() => fileRef.current?.click()}
               >
                 <Plus size={24} />
@@ -1313,7 +1434,7 @@ export default function ChatApp() {
 
   return (
     <div
-      className={`app-shell ${selected ? "conversation-open" : ""} ${thread ? "thread-open" : ""}`}
+      className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${selected ? "conversation-open" : ""} ${thread ? "thread-open" : ""}`}
       onClickCapture={(event) => {
         // Safari does not focus clicked buttons by default. Establish the
         // trigger before opening a dialog so Escape restores a useful target.
@@ -1321,6 +1442,8 @@ export default function ChatApp() {
           event.target instanceof Element
             ? event.target.closest("button")
             : null;
+        if (button && !button.closest("[role=dialog]"))
+          menuAnchor.current = button;
         button?.focus({ preventScroll: true });
       }}
     >
@@ -1329,8 +1452,10 @@ export default function ChatApp() {
       </a>
       <aside className="app-rail" aria-label="App shortcuts">
         <IconButton
-          label="Open navigation home"
-          onClick={() => navigate("home")}
+          label="Main menu"
+          expanded={!sidebarCollapsed}
+          controls="chat-navigation"
+          onClick={() => setSidebarCollapsed((value) => !value)}
         >
           <Menu size={24} />
         </IconButton>
@@ -1385,6 +1510,7 @@ export default function ChatApp() {
               onClick={() => {
                 setQuery("");
                 setSearchScope(null);
+                setSearchFilters(DEFAULT_SEARCH_FILTERS);
                 setView("home");
               }}
             >
@@ -1396,7 +1522,7 @@ export default function ChatApp() {
         <div className="topbar-actions">
           <button
             className="status-button"
-            onClick={() => setModal({ type: "profile" })}
+            onClick={() => setModal({ type: "status" })}
           >
             <span
               className={`status-dot ${state.user.status === "Do not disturb" ? "dnd" : state.user.status === "Away" ? "away" : ""}`}
@@ -1410,7 +1536,7 @@ export default function ChatApp() {
           </button>
           <IconButton
             label="Help and installation"
-            onClick={() => setModal({ type: "install" })}
+            onClick={() => setModal({ type: "support" })}
           >
             <CircleHelp size={23} />
           </IconButton>
@@ -1429,7 +1555,11 @@ export default function ChatApp() {
           </button>
         </div>
       </header>
-      <aside className="sidebar" aria-label="Chat navigation">
+      <aside
+        id="chat-navigation"
+        className="sidebar"
+        aria-label="Chat navigation"
+      >
         <button
           className="new-chat-button"
           onClick={() => setModal({ type: "new", kind: "dm" })}
@@ -1453,8 +1583,16 @@ export default function ChatApp() {
         </nav>
         <div className="sidebar-group">
           <div className="sidebar-group-heading">
-            <button onClick={() => navigate("direct")}>
-              <ChevronDown size={17} />
+            <button
+              aria-expanded={directExpanded}
+              aria-controls="direct-conversations"
+              onClick={() => setDirectExpanded((value) => !value)}
+            >
+              {directExpanded ? (
+                <ChevronDown size={17} />
+              ) : (
+                <ChevronRight size={17} />
+              )}
               Direct messages
             </button>
             <IconButton
@@ -1464,31 +1602,41 @@ export default function ChatApp() {
               <Plus size={19} />
             </IconButton>
           </div>
-          {state.conversations
-            .filter((c) => c.kind !== "space" && !c.section)
-            .slice(0, 7)
-            .map((c) => (
-              <button
-                key={c.id}
-                aria-label={c.name}
-                className={`sidebar-conversation ${selectedId === c.id ? "selected" : ""}`}
-                onClick={() => openConversation(c)}
-              >
-                <ConversationAvatar
-                  userId={state.user.id}
-                  conversation={c}
-                  small
-                />
-                <span className={c.unread ? "unread" : ""}>{c.name}</span>
-                {c.muted && <BellOff size={13} />}
-                {!!c.unread && <span className="unread-dot" />}
-              </button>
-            ))}
+          <div id="direct-conversations" hidden={!directExpanded}>
+            {state.conversations
+              .filter((c) => c.kind !== "space" && !c.section)
+              .slice(0, 7)
+              .map((c) => (
+                <button
+                  key={c.id}
+                  aria-label={c.name}
+                  className={`sidebar-conversation ${selectedId === c.id ? "selected" : ""}`}
+                  onClick={() => openConversation(c)}
+                >
+                  <ConversationAvatar
+                    userId={state.user.id}
+                    conversation={c}
+                    small
+                  />
+                  <span className={c.unread ? "unread" : ""}>{c.name}</span>
+                  {c.muted && <BellOff size={13} />}
+                  {!!c.unread && <span className="unread-dot" />}
+                </button>
+              ))}
+          </div>
         </div>
         <div className="sidebar-group">
           <div className="sidebar-group-heading">
-            <button onClick={() => navigate("spaces")}>
-              <ChevronDown size={17} />
+            <button
+              aria-expanded={spacesExpanded}
+              aria-controls="space-conversations"
+              onClick={() => setSpacesExpanded((value) => !value)}
+            >
+              {spacesExpanded ? (
+                <ChevronDown size={17} />
+              ) : (
+                <ChevronRight size={17} />
+              )}
               Spaces
             </button>
             <IconButton
@@ -1498,25 +1646,27 @@ export default function ChatApp() {
               <Plus size={19} />
             </IconButton>
           </div>
-          {state.conversations
-            .filter((c) => c.kind === "space" && !c.section)
-            .map((c) => (
-              <button
-                key={c.id}
-                aria-label={c.name}
-                className={`sidebar-conversation ${selectedId === c.id ? "selected" : ""}`}
-                onClick={() => openConversation(c)}
-              >
-                <ConversationAvatar
-                  userId={state.user.id}
-                  conversation={c}
-                  small
-                />
-                <span className={c.unread ? "unread" : ""}>{c.name}</span>
-                {c.pinned && <Pin size={13} />}
-                {!!c.unread && <span className="unread-dot" />}
-              </button>
-            ))}
+          <div id="space-conversations" hidden={!spacesExpanded}>
+            {state.conversations
+              .filter((c) => c.kind === "space" && !c.section)
+              .map((c) => (
+                <button
+                  key={c.id}
+                  aria-label={c.name}
+                  className={`sidebar-conversation ${selectedId === c.id ? "selected" : ""}`}
+                  onClick={() => openConversation(c)}
+                >
+                  <ConversationAvatar
+                    userId={state.user.id}
+                    conversation={c}
+                    small
+                  />
+                  <span className={c.unread ? "unread" : ""}>{c.name}</span>
+                  {c.pinned && <Pin size={13} />}
+                  {!!c.unread && <span className="unread-dot" />}
+                </button>
+              ))}
+          </div>
         </div>
         {sectionNames.map((section) => (
           <div className="sidebar-group" key={section}>
@@ -1610,6 +1760,7 @@ export default function ChatApp() {
                   label="Search this conversation"
                   onClick={() => {
                     setSearchScope(selected.id);
+                    setSearchFilters(DEFAULT_SEARCH_FILTERS);
                     setQuery("");
                     setSelectedId(null);
                     setView("search");
@@ -1730,6 +1881,7 @@ export default function ChatApp() {
               </div>
               <button
                 className={`filter-button ${unreadOnly ? "active" : ""}`}
+                aria-pressed={unreadOnly}
                 onClick={() => setUnreadOnly(!unreadOnly)}
               >
                 <span className="filter-dot" />
@@ -1748,8 +1900,9 @@ export default function ChatApp() {
                 value={query}
                 onChange={(e) => {
                   setQuery(e.target.value);
-                  setView(e.target.value ? "search" : "home");
-                  if (!e.target.value) setSearchScope(null);
+                  setView(
+                    e.target.value || view === "search" ? "search" : "home",
+                  );
                 }}
               />
             </div>
@@ -1769,6 +1922,15 @@ export default function ChatApp() {
                   <Pin size={12} />
                   Pinned
                 </button>
+                <button
+                  role="checkbox"
+                  aria-checked={threadsOnly}
+                  className={threadsOnly ? "selected" : ""}
+                  onClick={() => setThreadsOnly((value) => !value)}
+                >
+                  <MessageSquare size={14} />
+                  Threads
+                </button>
                 <IconButton
                   label="Mark all conversations read"
                   onClick={() => {
@@ -1787,11 +1949,58 @@ export default function ChatApp() {
                 </IconButton>
               </div>
             )}
+            {view === "search" && (
+              <SearchFilters
+                values={activeSearchFilters}
+                people={[
+                  state.user,
+                  ...state.conversations.flatMap(
+                    (conversation) => conversation.members,
+                  ),
+                  ...state.messages.map((message) => message.author),
+                ]}
+                conversations={state.conversations}
+                resultCount={foundMessages.length}
+                onChange={(values) => {
+                  setSearchFilters(values);
+                  setSearchScope(values.conversationId || null);
+                }}
+              />
+            )}
             <div className="conversation-list">
-              {view === "starred" ||
+              {(view === "home" && threadsOnly) ||
+              view === "starred" ||
               view === "mentions" ||
-              (view === "search" && foundMessages.length > 0) ? (
+              view === "search" ? (
                 <>
+                  {view === "search" &&
+                    !hasSearchFilters(activeSearchFilters) &&
+                    visibleConversations.length > 0 && (
+                      <>
+                        <h2 className="list-heading">Conversations</h2>
+                        {visibleConversations.map((conversation) => (
+                          <button
+                            key={conversation.id}
+                            className="search-result"
+                            onClick={() => openConversation(conversation)}
+                          >
+                            <ConversationAvatar
+                              userId={state.user.id}
+                              conversation={conversation}
+                            />
+                            <span>
+                              <strong>{conversation.name}</strong>
+                              <small>
+                                {conversation.lastMessage ||
+                                  conversation.description ||
+                                  "Start a conversation"}
+                              </small>
+                            </span>
+                            <ChevronRight size={18} />
+                          </button>
+                        ))}
+                      </>
+                    )}
                   {view === "search" && (
                     <h2 className="list-heading">Messages</h2>
                   )}
@@ -1803,10 +2012,12 @@ export default function ChatApp() {
                       <button
                         key={m.id}
                         className="search-result"
+                        aria-label={`Message from ${m.author.name} in ${c?.name || "conversation"}: ${m.text || m.attachments.map((file) => file.name).join(", ")}`}
                         onClick={() => {
                           if (c) openConversation(c);
                           setJumpTarget(m.parentId || m.id);
                           if (m.parentId) setThreadId(m.parentId);
+                          else if (threadsOnly) setThreadId(m.id);
                         }}
                       >
                         <Avatar person={m.author} />
@@ -1814,7 +2025,17 @@ export default function ChatApp() {
                           <small>
                             {m.author.name} · {c?.name}
                           </small>
-                          <strong>{m.text}</strong>
+                          <strong>
+                            {m.text ||
+                              m.attachments.map((file) => file.name).join(", ")}
+                          </strong>
+                          {m.text && m.attachments.length > 0 && (
+                            <small>
+                              {m.attachments
+                                .map((file) => file.name)
+                                .join(", ")}
+                            </small>
+                          )}
                           <span>
                             {dateLabel(m.createdAt)} · {time(m.createdAt)}
                           </span>
@@ -1823,25 +2044,38 @@ export default function ChatApp() {
                       </button>
                     );
                   })}
-                  {!foundMessages.length && (
-                    <div className="empty-state">
-                      {view === "starred" ? (
-                        <Star size={40} />
-                      ) : (
-                        <AtSign size={40} />
-                      )}
-                      <h2>
-                        {view === "starred"
-                          ? "Save a thought for later"
-                          : "You’re all caught up"}
-                      </h2>
-                      <p>
-                        {view === "starred"
-                          ? "Star a message in any conversation and find it here."
-                          : "Messages that mention your name or @all will appear here."}
-                      </p>
-                    </div>
-                  )}
+                  {!foundMessages.length &&
+                    (view !== "search" ||
+                      hasSearchFilters(activeSearchFilters) ||
+                      !visibleConversations.length) && (
+                      <div className="empty-state">
+                        {view === "starred" ? (
+                          <Star size={40} />
+                        ) : threadsOnly ? (
+                          <MessageSquare size={40} />
+                        ) : (
+                          <AtSign size={40} />
+                        )}
+                        <h2>
+                          {view === "search"
+                            ? "No matching messages"
+                            : view === "starred"
+                              ? "Save a thought for later"
+                              : threadsOnly
+                                ? "No threads yet"
+                                : "You’re all caught up"}
+                        </h2>
+                        <p>
+                          {view === "search"
+                            ? "Try different words or clear a filter."
+                            : view === "starred"
+                              ? "Star a message in any conversation and find it here."
+                              : threadsOnly
+                                ? "Reply in a thread to keep a focused discussion together. Threads from your conversations will appear here."
+                                : "Messages that mention your name or @all will appear here."}
+                        </p>
+                      </div>
+                    )}
                 </>
               ) : view === "sections" ? (
                 <>
@@ -1893,9 +2127,6 @@ export default function ChatApp() {
                 </>
               ) : (
                 <>
-                  {view === "search" && (
-                    <h2 className="list-heading">Conversations</h2>
-                  )}
                   {visibleConversations.map((c) => (
                     <div
                       key={c.id}
@@ -1983,7 +2214,18 @@ export default function ChatApp() {
               <X size={22} />
             </IconButton>
           </header>
-          <div className="thread-messages">
+          <div
+            className="thread-messages"
+            ref={threadScrollRef}
+            onScroll={(event) => {
+              const scroller = event.currentTarget;
+              threadAtBottom.current =
+                scroller.scrollHeight -
+                  scroller.scrollTop -
+                  scroller.clientHeight <
+                90;
+            }}
+          >
             {messageRow(thread, true)}
             <div className="thread-divider">
               {replies.length} {replies.length === 1 ? "reply" : "replies"}
@@ -2020,51 +2262,150 @@ export default function ChatApp() {
           <span>More</span>
         </button>
       </nav>
-      <button
-        className="mobile-new-chat"
-        aria-label="New chat"
-        onClick={() => setModal({ type: "new", kind: "dm" })}
-      >
-        <Pencil size={23} />
-      </button>
+      {view !== "search" && (
+        <button
+          className="mobile-new-chat"
+          aria-label="New chat"
+          onClick={() => setModal({ type: "new", kind: "dm" })}
+        >
+          <Pencil size={23} />
+        </button>
+      )}
       {toastUI}
 
       {modal && (
         <Dialog
+          contextual={
+            ["message", "emoji", "status", "support"].includes(modal.type) ||
+            (modal.type === "new" && !compactViewport)
+          }
+          formPopover={modal.type === "new"}
+          anchor={menuAnchor.current}
           title={
-            modal.type === "attachment"
-              ? "Image preview"
-              : modal.type === "new"
-                ? "Start a conversation"
-                : modal.type === "settings"
-                  ? "Settings"
-                  : modal.type === "profile"
-                    ? "Your profile"
-                    : modal.type === "install"
-                      ? "Make yourself at home"
-                      : modal.type === "more"
-                        ? "More in Chat"
-                        : modal.type === "voice"
-                          ? "Record a voice note"
-                          : modal.type === "about"
-                            ? modal.conversation.name
-                            : modal.type === "conversation"
-                              ? "Conversation settings"
-                              : modal.type === "invite"
-                                ? "Add people"
-                                : modal.type === "leave"
-                                  ? "Leave this conversation?"
-                                  : modal.type === "edit"
-                                    ? "Edit message"
-                                    : modal.type === "delete"
-                                      ? "Delete this message?"
-                                      : modal.type === "emoji"
-                                        ? "Add a reaction"
-                                        : "Message actions"
+            modal.type === "status"
+              ? "Availability"
+              : modal.type === "support"
+                ? "Help and support"
+                : modal.type === "guide"
+                  ? "Using Chat"
+                  : modal.type === "attachment"
+                    ? "Image preview"
+                    : modal.type === "new"
+                      ? "Start a conversation"
+                      : modal.type === "settings"
+                        ? "Settings"
+                        : modal.type === "profile"
+                          ? "Your profile"
+                          : modal.type === "install"
+                            ? "Make yourself at home"
+                            : modal.type === "more"
+                              ? "More in Chat"
+                              : modal.type === "voice"
+                                ? "Record a voice note"
+                                : modal.type === "about"
+                                  ? modal.conversation.name
+                                  : modal.type === "conversation"
+                                    ? "Conversation settings"
+                                    : modal.type === "invite"
+                                      ? "Add people"
+                                      : modal.type === "leave"
+                                        ? "Leave this conversation?"
+                                        : modal.type === "edit"
+                                          ? "Edit message"
+                                          : modal.type === "delete"
+                                            ? "Delete this message?"
+                                            : modal.type === "emoji"
+                                              ? "Add a reaction"
+                                              : "Message actions"
           }
           onClose={closeModal}
           wide={modal.type === "attachment"}
         >
+          {modal.type === "status" && (
+            <div className="menu-list">
+              {(["Active", "Away", "Do not disturb"] as const).map((status) => (
+                <button
+                  key={status}
+                  aria-pressed={
+                    (state.user.status === "Away" ||
+                    state.user.status === "Do not disturb"
+                      ? state.user.status
+                      : "Active") === status
+                  }
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      await act(
+                        { type: "profile", status },
+                        `Status set to ${status}`,
+                      );
+                      setModal(null);
+                    } catch {
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                  disabled={busy}
+                >
+                  <span
+                    className={`status-dot ${status === "Away" ? "away" : status === "Do not disturb" ? "dnd" : ""}`}
+                  />
+                  {status}
+                  {(state.user.status === "Away" ||
+                  state.user.status === "Do not disturb"
+                    ? state.user.status
+                    : "Active") === status && <Check size={18} />}
+                </button>
+              ))}
+            </div>
+          )}
+          {modal.type === "support" && (
+            <div className="menu-list support-menu">
+              <button onClick={() => setModal({ type: "guide" })}>
+                <CircleHelp size={20} />
+                Using Chat
+                <ChevronRight size={18} />
+              </button>
+              <button onClick={() => setModal({ type: "install" })}>
+                <Smartphone size={20} />
+                Add to Home Screen
+                <ChevronRight size={18} />
+              </button>
+              <button onClick={() => setModal({ type: "settings" })}>
+                <Settings size={20} />
+                Settings
+                <ChevronRight size={18} />
+              </button>
+            </div>
+          )}
+          {modal.type === "guide" && (
+            <div className="chat-guide">
+              <p>
+                <strong>Start a conversation</strong>Choose New chat, search for
+                someone from your conversations, or enter a full email address
+                to invite a friend. Pick Direct message, Group, or Space.
+              </p>
+              <p>
+                <strong>Share more than text</strong>Attach images and files up
+                to 5 MB each, or record a voice message up to 60 seconds. Listen
+                before sending.
+              </p>
+              <p>
+                <strong>Keep replies together</strong>Use a message’s More
+                actions menu to reply in a thread, react, or star it. You can
+                edit or delete your own messages.
+              </p>
+              <p>
+                <strong>Invite a friend</strong>Open Conversation details, add
+                their email, then share the invitation link. They sign in with
+                Google using that same email.
+              </p>
+              <p>
+                <strong>Keyboard shortcuts</strong>Enter sends. Shift + Enter
+                adds a line. Ctrl or ⌘ + K opens search. Escape closes menus.
+              </p>
+            </div>
+          )}
           {modal.type === "attachment" && (
             <div className="attachment-preview">
               <img src={modal.attachment.url} alt={modal.attachment.name} />
@@ -2084,8 +2425,10 @@ export default function ChatApp() {
           {modal.type === "voice" && (
             <VoiceRecorder
               onRecorded={(attachment) => {
-                if (attachments.length >= 3) {
-                  setToast("Attach up to 3 files per message.");
+                if (attachments.length >= MAX_ATTACHMENTS) {
+                  setToast(
+                    `Attach up to ${MAX_ATTACHMENTS} files per message.`,
+                  );
                   return;
                 }
                 setAttachments((files) => [...files, attachment]);
@@ -2096,87 +2439,17 @@ export default function ChatApp() {
             />
           )}
           {modal.type === "new" && (
-            <form onSubmit={submitNew}>
-              <div className="kind-tabs">
-                {(["dm", "group", "space"] as const).map((kind) => (
-                  <button
-                    type="button"
-                    key={kind}
-                    className={modal.kind === kind ? "selected" : ""}
-                    onClick={() => setModal({ type: "new", kind })}
-                  >
-                    {kind === "dm"
-                      ? "Direct message"
-                      : kind === "group"
-                        ? "Group"
-                        : "Space"}
-                  </button>
-                ))}
-              </div>
-              <label>
-                {modal.kind === "dm"
-                  ? "Conversation name"
-                  : modal.kind === "space"
-                    ? "Space name"
-                    : "Group name"}
-                <input
-                  name="name"
-                  required
-                  maxLength={80}
-                  placeholder={
-                    modal.kind === "space"
-                      ? "e.g. Design team"
-                      : "e.g. Maya Chen"
-                  }
-                  autoComplete="off"
-                />
-              </label>
-              <label>
-                {modal.kind === "dm" ? "Their email" : "Add people by email"}
-                <input
-                  name="emails"
-                  type={modal.kind === "dm" ? "email" : "text"}
-                  required={modal.kind !== "space"}
-                  placeholder={
-                    modal.kind === "dm"
-                      ? "name@example.com"
-                      : "maya@example.com, alex@example.com"
-                  }
-                />
-                <small>
-                  {modal.kind === "dm"
-                    ? "Start a private conversation with one person."
-                    : "Separate email addresses with commas."}
-                </small>
-              </label>
-              {modal.kind === "space" && (
-                <label>
-                  Description <span className="optional">optional</span>
-                  <textarea
-                    name="description"
-                    rows={3}
-                    maxLength={500}
-                    placeholder="What is this space for?"
-                  />
-                </label>
-              )}
-              <div className="dialog-footer">
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={closeModal}
-                >
-                  Cancel
-                </button>
-                <button className="primary-button" disabled={busy}>
-                  {busy
-                    ? "Creating…"
-                    : modal.kind === "space"
-                      ? "Create space"
-                      : "Start chat"}
-                </button>
-              </div>
-            </form>
+            <NewConversationForm
+              kind={modal.kind}
+              currentEmail={state.user.email}
+              people={state.conversations
+                .flatMap((conversation) => conversation.members)
+                .filter((person) => person.id !== state.user.id)}
+              busy={busy}
+              onKind={(kind) => setModal({ type: "new", kind })}
+              onSubmit={submitNew}
+              onClose={closeModal}
+            />
           )}
           {modal.type === "profile" && (
             <>
@@ -2313,18 +2586,7 @@ export default function ChatApp() {
           {modal.type === "install" && (
             <InstallHelp
               canInstall={Boolean(installPrompt)}
-              onInstall={async () => {
-                if (!installPrompt) return;
-                try {
-                  await installPrompt.prompt();
-                } catch {
-                  setToast(
-                    "Installation did not complete. You can use your browser menu to try again.",
-                  );
-                } finally {
-                  setInstallPrompt(null);
-                }
-              }}
+              onInstall={installApp}
             />
           )}
           {modal.type === "more" && (
@@ -2527,13 +2789,26 @@ export default function ChatApp() {
                     (m) =>
                       m.conversationId === modal.conversation.id && !m.deleted,
                   )
-                  .flatMap((m) => m.attachments)
-                  .map((f, i) => (
-                    <a key={i} href={f.url} download={f.name}>
-                      <File size={20} />
-                      <span>{f.name}</span>
-                      <ArrowDownToLine size={17} />
-                    </a>
+                  .flatMap((m) =>
+                    m.attachments.map((attachment, index) => ({
+                      attachment,
+                      index,
+                      messageId: m.id,
+                    })),
+                  )
+                  .map(({ attachment, index, messageId }) => (
+                    <MediaAttachment
+                      key={`${messageId}-${index}`}
+                      shared
+                      attachment={attachment}
+                      messageId={messageId}
+                      index={index}
+                      onLoad={chat.loadAttachment}
+                      onRetry={chat.retryAttachment}
+                      onPreview={(attachment) =>
+                        setModal({ type: "attachment", attachment })
+                      }
+                    />
                   ))}
                 {!state.messages.some(
                   (m) =>
