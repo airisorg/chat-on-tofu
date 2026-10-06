@@ -393,7 +393,7 @@ test('bounded media cache evicts older object URLs and deletes files removed by 
   cache.reset();
 });
 
-test('evicted visible media requires explicit retry across polls and cache entries stay bounded', async () => {
+test('Media eviction needs explicit retry', async () => {
   let calls = 0;
   let created = 0;
   const cache = new PrivateMediaCache(async () => { calls++; return mediaResponse(); }, () => {}, { create: () => `blob:fixture-${++created}`, revoke: () => {} }, { bytes: 18, files: 2 });
