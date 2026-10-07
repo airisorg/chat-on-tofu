@@ -416,16 +416,19 @@ async function prepareUser(sql: Query, user: User) {
     existing = changed ?? existing;
   }
   if (claimInvites) {
-    // Bound automatic admission work. The per-owner read counter and minute
-    // advance a rotating cursor, so ten refusals cannot starve a later group.
-    // Internal calls without the route quota rotate once per minute. A refused
-    // invitation remains pending and never rolls back another admitted group.
-    const pending =
-      await sql`with pending as materialized (select conversation_id from relay.invites where email=${email}), cursor as (
-      select (floor(extract(epoch from date_trunc('minute',now())) / 60)::bigint
-        + (coalesce((select requests from relay.request_limits where owner_id=${user.id} and bucket='read' and window_start=date_trunc('minute',now())),1) - 1) * 10)
-        % greatest((select count(*) from pending),1) as position
-    ) select conversation_id from pending order by conversation_id offset (select position from cursor) limit 10`;
+    // Bound automatic admission work with a cyclic window: queues of at most
+    // ten are fully examined, and larger queues rotate without skipping a prefix
+    // at the end of the order. A refused invitation remains pending and never
+    // rolls back another admitted group. Internal calls rotate once per minute.
+    const pending = await sql`with pending as materialized (
+        select conversation_id,row_number() over(order by conversation_id)-1 as ordinal
+        from relay.invites where email=${email}
+      ), size as (select greatest(count(*),1) as total from pending), cursor as (
+        select (floor(extract(epoch from date_trunc('minute',now())) / 60)::bigint
+          + (coalesce((select requests from relay.request_limits where owner_id=${user.id} and bucket='read' and window_start=date_trunc('minute',now())),1) - 1) * 10)
+          % total as position,total from size
+      ) select conversation_id from pending cross join cursor
+        order by (pending.ordinal-cursor.position+cursor.total)%cursor.total limit 10`;
     for (const invitation of pending)
       await automaticMetadata(sql, async () => {
         const claimed =

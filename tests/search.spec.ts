@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { createDemoState, DEMO_STORAGE_KEY } from '../src/lib/demo';
 import type { Message } from '../src/lib/types';
+import { isStoredDemoState } from '../src/lib/demo-storage';
 
 const main = (page: Page) => page.getByRole('main');
 const results = (page: Page) => main(page).locator('button.search-result');
@@ -95,7 +96,7 @@ test.beforeEach(async ({ page }) => {
   const image = {
     name: 'review.png',
     type: 'image/png',
-    size: 67,
+    size: 68,
     url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDZkAAAAASUVORK5CYII=',
   };
   state.messages.push(
@@ -121,7 +122,7 @@ test.beforeEach(async ({ page }) => {
         {
           name: 'proposal.pdf',
           type: 'application/pdf',
-          size: 5,
+          size: 4,
           url: 'data:application/pdf;base64,JVBERg==',
         },
       ],
@@ -131,7 +132,7 @@ test.beforeEach(async ({ page }) => {
         {
           name: 'recording.m4a',
           type: 'audio/mp4',
-          size: 5,
+          size: 4,
           url: 'data:audio/mp4;base64,AAAAAA==',
         },
       ],
@@ -184,6 +185,10 @@ test.beforeEach(async ({ page }) => {
       });
     }
   }
+  expect(
+    isStoredDemoState(state),
+    'Search fixture must satisfy the stored-demo contract, including exact attachment byte sizes',
+  ).toBe(true);
   await page.addInitScript(
     ({ state, key }) => {
       localStorage.setItem(key, JSON.stringify(state));

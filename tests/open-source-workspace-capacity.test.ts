@@ -28,13 +28,28 @@ const identity = (label: string, large = false): User => ({
 const metadataBytes = (state: Awaited<ReturnType<typeof candidate.getChat>>) =>
   Buffer.byteLength(JSON.stringify({ ...state, messages: [] }));
 
-async function fixture() {
+async function fixture(invitationMinute?: number) {
   const server = await functions;
   const pg = new PGlite(),
-    bounds = new Map<string, number>();
+    bounds = new Map<string, number>(),
+    invitationWindows: string[][] = [];
   const observe = (engine: { query: typeof pg.query }) => ({
     query: async (query: string, parameters?: unknown[]) => {
+      // Freeze only the SQL cursor's minute term. PostgreSQL still executes the
+      // production ordering, rotation, limit, savepoints and admission guards.
+      const isInvitationWindow = query.includes('with pending as materialized');
+      if (isInvitationWindow && invitationMinute !== undefined) {
+        const expression = "floor(extract(epoch from date_trunc('minute',now())) / 60)::bigint";
+        assert.equal(query.split(expression).length, 2, 'cursor clock must be substituted once');
+        const bound = parameters ?? [];
+        query = query.replace(expression, `$${bound.length + 1}::bigint`);
+        parameters = [...bound, invitationMinute];
+      }
       const result = await engine.query(query, parameters);
+      if (isInvitationWindow)
+        invitationWindows.push(
+          (result.rows as { conversation_id: string }[]).map((row) => row.conversation_id),
+        );
       if (query.includes('metadata_upper_bytes'))
         for (const row of result.rows as { id: string; metadata_upper_bytes: number }[])
           bounds.set(row.id, Number(row.metadata_upper_bytes));
@@ -43,7 +58,7 @@ async function fixture() {
   });
   const sql = sqlAdapter(observe(pg), (callback) => pg.transaction((tx) => callback(observe(tx))));
   await server.applySchema(sql);
-  return { server, pg, sql, bounds };
+  return { server, pg, sql, bounds, invitationWindows };
 }
 
 // Legal legacy data is seeded directly to exercise a workspace that predates
@@ -321,72 +336,96 @@ for (const type of ['create', 'invite'] as const)
     }
   });
 
-test('automatic claims preserve usable sign-in and other admitted groups when a peer would overflow', async () => {
-  const f = await fixture(),
-    owner = identity('pending-owner'),
-    victim = identity('pending-victim'),
-    joining = identity('pending-new', true);
-  try {
-    await f.server.getChat(owner, f.sql);
-    await f.server.getChat(victim, f.sql);
-    const conversationId = (
-      await f.server.mutateChat(
-        owner,
-        {
-          type: 'create',
-          kind: 'group',
-          name: 'Pending claim',
-          emails: [victim.email!, joining.email!],
-        },
-        f.sql,
-      )
-    ).id!;
-    const admitted = (
-      await f.server.mutateChat(
-        owner,
-        { type: 'create', kind: 'group', name: 'Admitted independently', emails: [joining.email!] },
-        f.sql,
-      )
-    ).id!;
-    await fillNearLimit(f, victim, 500);
-    const signedIn = await f.server.getChat(joining, f.sql);
-    assert.equal(signedIn.user.id, joining.id);
-    assert.deepEqual(
-      signedIn.conversations.map((c) => c.id),
-      [admitted],
-    );
-    assert.equal(
-      (await f.pg.query('select id from relay.profiles where id=$1', [joining.id])).rows.length,
-      1,
-    );
-    assert.equal(
-      (
-        await f.pg.query(
-          'select user_id from relay.participants where user_id=$1 and conversation_id=$2',
-          [joining.id, conversationId],
+for (const admittedFirst of [true, false])
+  test(`automatic claims preserve usable sign-in and admitted groups across a wrapping window (admitted first: ${admittedFirst})`, async (t) => {
+    const f = await fixture(1),
+      owner = identity('pending-owner'),
+      victim = identity('pending-victim'),
+      joining = identity('pending-new', true);
+    const low = '00000000-0000-4000-8000-000000000001',
+      high = '00000000-0000-4000-8000-000000000002';
+    let nextId: string | null = admittedFirst ? high : low;
+    const randomUUID = crypto.randomUUID.bind(crypto);
+    t.mock.method(crypto, 'randomUUID', () => {
+      if (!nextId) return randomUUID();
+      const id = nextId;
+      nextId = null;
+      return id as ReturnType<typeof crypto.randomUUID>;
+    });
+    try {
+      await f.server.getChat(owner, f.sql);
+      await f.server.getChat(victim, f.sql);
+      const conversationId = (
+        await f.server.mutateChat(
+          owner,
+          {
+            type: 'create',
+            kind: 'group',
+            name: 'Pending claim',
+            emails: [victim.email!, joining.email!],
+          },
+          f.sql,
         )
-      ).rows.length,
-      0,
-    );
-    assert.deepEqual(
-      (await f.server.getChat(joining, f.sql)).conversations.map((c) => c.id),
-      [admitted],
-      'repeated polling remains usable while the refused invitation stays pending',
-    );
-    assert.equal(
-      (
-        await f.pg.query('select email from relay.invites where conversation_id=$1 and email=$2', [
-          conversationId,
-          joining.email,
-        ])
-      ).rows.length,
-      1,
-    );
-    assert.ok(metadataBytes(await f.server.getChat(victim, f.sql)) < limit);
-  } finally {
-    await f.pg.close();
-  }
-});
+      ).id!;
+      assert.equal(conversationId, admittedFirst ? high : low);
+      nextId = admittedFirst ? low : high;
+      const admitted = (
+        await f.server.mutateChat(
+          owner,
+          {
+            type: 'create',
+            kind: 'group',
+            name: 'Admitted independently',
+            emails: [joining.email!],
+          },
+          f.sql,
+        )
+      ).id!;
+      assert.equal(admitted, admittedFirst ? low : high);
+      await fillNearLimit(f, victim, 500);
+      const signedIn = await f.server.getChat(joining, f.sql);
+      assert.equal(signedIn.user.id, joining.id);
+      assert.deepEqual(
+        f.invitationWindows.at(-1),
+        [high, low],
+        'offset1 must wrap before admission',
+      );
+      assert.deepEqual(
+        signedIn.conversations.map((c) => c.id),
+        [admitted],
+      );
+      assert.equal(
+        (await f.pg.query('select id from relay.profiles where id=$1', [joining.id])).rows.length,
+        1,
+      );
+      assert.equal(
+        (
+          await f.pg.query(
+            'select user_id from relay.participants where user_id=$1 and conversation_id=$2',
+            [joining.id, conversationId],
+          )
+        ).rows.length,
+        0,
+      );
+      assert.deepEqual(
+        (await f.server.getChat(joining, f.sql)).conversations.map((c) => c.id),
+        [admitted],
+        'repeated polling remains usable while the refused invitation stays pending',
+      );
+      assert.equal(
+        (
+          await f.pg.query(
+            'select email from relay.invites where conversation_id=$1 and email=$2',
+            [conversationId, joining.email],
+          )
+        ).rows.length,
+        1,
+      );
+      assert.ok(metadataBytes(await f.server.getChat(victim, f.sql)) < limit);
+    } finally {
+      await f.pg.close();
+    }
+  });
 
 for (const mode of ['profile', 'conversation'] as const)
   test(`shared ${mode} changes cannot poison another member's valid workspace`, async () => {
@@ -843,3 +882,55 @@ test('ten refused invitations cannot starve an eleventh admissible group across 
     await f.pg.close();
   }
 });
+
+for (const pendingCount of [2, 5, 10, 11])
+  test(`automatic invitation cursor wraps at the end with ${pendingCount} candidates`, async () => {
+    const f = await fixture(pendingCount - 1),
+      owner = identity(`window-owner-${pendingCount}`),
+      joining = identity(`window-joining-${pendingCount}`);
+    const ids = Array.from(
+      { length: pendingCount },
+      (_, index) => `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+    );
+    try {
+      await f.server.getChat(owner, f.sql);
+      for (const [index, id] of ids.entries()) {
+        await f.pg.query(
+          "insert into relay.conversations(id,name,kind,creator_id) values($1,$2,'group',$3)",
+          [id, `Window ${index}`, owner.id],
+        );
+        await f.pg.query('insert into relay.participants(conversation_id,user_id) values($1,$2)', [
+          id,
+          owner.id,
+        ]);
+        await f.pg.query('insert into relay.invites(conversation_id,email) values($1,$2)', [
+          id,
+          joining.email,
+        ]);
+      }
+      const state = await f.server.getChat(joining, f.sql);
+      const expected = [ids.at(-1)!, ...ids.slice(0, Math.min(pendingCount, 10) - 1)];
+      assert.deepEqual(
+        f.invitationWindows.at(-1),
+        expected,
+        'one window wraps, returns min(10,N), and keeps cyclic order',
+      );
+      assert.equal(
+        new Set(f.invitationWindows.at(-1)).size,
+        expected.length,
+        'candidates cannot repeat',
+      );
+      assert.deepEqual(state.conversations.map((c) => c.id).sort(), [...expected].sort());
+      assert.deepEqual(
+        (
+          await f.pg.query<{ conversation_id: string }>(
+            'select conversation_id from relay.invites where email=$1 order by conversation_id',
+            [joining.email],
+          )
+        ).rows.map((row) => row.conversation_id),
+        ids.filter((id) => !expected.includes(id)),
+      );
+    } finally {
+      await f.pg.close();
+    }
+  });
