@@ -435,3 +435,41 @@ test('false connectivity hint permits a reachable explicit pop-up send', async (
   expect(fixture.sends).toHaveLength(1);
   expect(await page.evaluate(() => navigator.onLine)).toBe(false);
 });
+
+test('keyboard pop-up minimize, restore, close and expand keep a meaningful focus destination', async ({ page }) => {
+  await demo(page);
+  const opener = main(page).getByRole('button', { name: 'Open in a pop-up', exact: true });
+  await opener.focus(); await opener.press('Enter');
+  await expect(miniInput(page)).toBeFocused();
+  await miniInput(page).fill('Keyboard-only retained pop-up draft');
+  const minimize = panel(page).getByRole('button', { name: 'Minimize pop-up', exact: true });
+  await minimize.focus(); await minimize.press('Enter');
+  const restore = panel(page).getByRole('button', { name: 'Restore pop-up', exact: true });
+  await expect(restore).toBeFocused(); await restore.press('Enter');
+  await expect(miniInput(page)).toBeFocused();
+  const close = panel(page).getByRole('button', { name: 'Close pop-up', exact: true });
+  await close.focus(); await close.press('Enter');
+  await expect(panel(page)).toHaveCount(0);
+  await expect(opener).toBeFocused();
+  await opener.press('Enter');
+  await expect(miniInput(page)).toHaveValue('Keyboard-only retained pop-up draft');
+  const expand = panel(page).getByRole('button', { name: 'Expand conversation', exact: true });
+  await expand.focus(); await expand.press('Enter');
+  await expect(panel(page)).toHaveCount(0);
+  await expect(mainInput(page)).toBeFocused();
+  await expect(mainInput(page)).toHaveValue('Keyboard-only retained pop-up draft');
+});
+
+test('keyboard close uses the persistent Home control when its original opener was removed', async ({ page }) => {
+  await demo(page);
+  const opener = main(page).getByRole('button', { name: 'Open in a pop-up', exact: true });
+  await opener.focus(); await opener.press('Enter');
+  await expect(miniInput(page)).toBeFocused();
+  await miniInput(page).fill('Draft survives navigation before close');
+  await page.getByRole('navigation').getByRole('button', { name: 'Home', exact: true }).click();
+  await expect(opener).toHaveCount(0);
+  const close = panel(page).getByRole('button', { name: 'Close pop-up', exact: true });
+  await close.focus(); await close.press('Enter');
+  await expect(panel(page)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'More Home actions', exact: true })).toBeFocused();
+});

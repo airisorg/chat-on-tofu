@@ -1,0 +1,93 @@
+/* The light reference shows independent group, hover and selection layers.
+   Duration/easing and unobserved dark/focus states are Material adaptations. */
+.sidebar {
+  --sidebar-state-duration: 150ms;
+  --sidebar-state-easing: cubic-bezier(0.2, 0, 0, 1);
+  --sidebar-row-hover: color-mix(in srgb, var(--hover) 92%, var(--ink));
+  --sidebar-row-pressed: color-mix(in srgb, var(--hover) 88%, var(--ink));
+}
+
+@media (min-width: 800px) and (pointer: fine) {
+  .sidebar :global(nav),
+  .sidebar :global(.sidebar-group) {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .sidebar :global(nav)::before,
+  .sidebar :global(.sidebar-group)::before {
+    content: "";
+    position: absolute;
+    inset: -4px;
+    z-index: -1;
+    pointer-events: none;
+    border-radius: 16px;
+    background-color: var(--hover);
+    opacity: 0;
+    transition: opacity var(--sidebar-state-duration) var(--sidebar-state-easing);
+  }
+
+  .sidebar :global(.nav-item),
+  .sidebar :global(.sidebar-conversation),
+  .sidebar :global(.sidebar-shortcuts-heading),
+  .sidebar :global(.sidebar-group-heading) > button:first-child {
+    transition: background-color var(--sidebar-state-duration) var(--sidebar-state-easing);
+  }
+
+  .sidebar :global(.sidebar-shortcuts-heading) {
+    border-radius: 16px;
+  }
+
+  .sidebar :global(nav):has(:focus-visible)::before,
+  .sidebar :global(.sidebar-group):has(:focus-visible)::before {
+    opacity: 1;
+  }
+
+  .sidebar :global(.nav-item:not(.selected)):focus-visible,
+  .sidebar :global(.sidebar-conversation:not(.selected)):focus-visible,
+  .sidebar :global(.sidebar-shortcuts-heading):focus-visible,
+  .sidebar :global(.sidebar-group-heading) > button:first-child:focus-visible {
+    background-color: var(--sidebar-row-hover);
+  }
+
+  .sidebar :global(.nav-item.selected):is(:hover, :active, :focus-visible),
+  .sidebar :global(.sidebar-conversation.selected):is(:hover, :active, :focus-visible) {
+    background-color: var(--selected);
+  }
+
+  :global(.sidebar-collapsed) .sidebar :global(nav)::before {
+    display: none;
+  }
+}
+
+@media (min-width: 800px) and (hover: hover) and (pointer: fine) {
+  .sidebar :global(nav):hover::before,
+  .sidebar :global(.sidebar-group):hover::before {
+    opacity: 1;
+  }
+
+  .sidebar :global(.nav-item:not(.selected)):hover,
+  .sidebar :global(.sidebar-conversation:not(.selected)):hover,
+  .sidebar :global(.sidebar-shortcuts-heading):hover,
+  .sidebar :global(.sidebar-group-heading) > button:first-child:hover {
+    background-color: var(--sidebar-row-hover);
+  }
+
+  .sidebar :global(.nav-item:not(.selected)):active,
+  .sidebar :global(.sidebar-conversation:not(.selected)):active,
+  .sidebar :global(.sidebar-shortcuts-heading):active,
+  .sidebar :global(.sidebar-group-heading) > button:first-child:active {
+    background-color: var(--sidebar-row-pressed);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar :global(nav)::before,
+  .sidebar :global(.sidebar-group)::before,
+  .sidebar :global(.nav-item),
+  .sidebar :global(.sidebar-conversation),
+  .sidebar :global(.sidebar-shortcuts-heading),
+  .sidebar :global(.sidebar-group-heading) > button:first-child {
+    transition: none;
+  }
+}

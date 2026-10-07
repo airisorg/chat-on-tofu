@@ -73,6 +73,7 @@ for (const theme of ["light", "dark"] as const) {
   test(`${theme} wide message history stays centered and sender/date spacing stays compact`, async ({ page }, info) => {
     await page.setViewportSize({ width: 2200, height: 1100 });
     await demo(page, theme);
+    await page.getByRole("complementary", { name: "Chat navigation" }).getByRole("button", { name: "Design team", exact: true }).click();
     const row = page.getByRole("main").getByRole("article").filter({ hasText: "Good morning, team!" });
     const wrapper = row.locator("xpath=..");
     const alignment = await wrapper.evaluate(node => {

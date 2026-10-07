@@ -82,4 +82,6 @@ The security browser suite requires a production build and a configured public i
 
 Screenshot baselines in this repository were reviewed on macOS for Chrome and WebKit. They detect drift in our interface; they do not prove pixel identity with Google's interface. Other operating systems need separately reviewed baselines because font and native emoji rendering differ. Set `CHAT_EVIDENCE_DIR` to export selected captures and benchmark data; otherwise generated evidence stays under ignored `test-results/`.
 
+See [the Home controls and motion audit](docs/home-controls-parity.md) for reference-based navigation decisions and known parity limits.
+
 See [the complete browser inventory and screenshot review process](docs/testing.md) for the two-server aggregate command, non-vacuous geometry checks, source binding and evidence boundaries.

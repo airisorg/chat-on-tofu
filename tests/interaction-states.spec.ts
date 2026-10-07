@@ -32,6 +32,7 @@ test('hover, press and keyboard focus preserve geometry and distinguish focus',a
 });
 
 test('repeated new-chat open and Escape leave no overlays or lost composer draft',async({page})=>{
+  await page.getByRole('complementary',{name:'Chat navigation'}).getByRole('button',{name:'Design team',exact:true}).click();
   const input=page.getByRole('main').getByRole('textbox',{name:'Message',exact:true});
   await input.fill('Unsent draft survives repeated menus');
   const opener=page.getByRole('complementary',{name:'Chat navigation'}).getByRole('button',{name:'New chat',exact:true});
@@ -47,6 +48,7 @@ test('repeated new-chat open and Escape leave no overlays or lost composer draft
 });
 
 test('desktop compact menu supports quick reactions and Escape focus restoration',async({page})=>{
+  await page.getByRole('complementary',{name:'Chat navigation'}).getByRole('button',{name:'Design team',exact:true}).click();
   const row=page.getByRole('main').getByRole('article').filter({hasText:'Good morning, team!'});
   await row.hover();
   await row.getByRole('button',{name:'React 👍',exact:true}).click();
@@ -63,6 +65,7 @@ test('desktop compact menu supports quick reactions and Escape focus restoration
 });
 
 test('dark phone action rows retain44px targets and dismissal in a short viewport',async({page})=>{
+  await page.getByRole('complementary',{name:'Chat navigation'}).getByRole('button',{name:'Design team',exact:true}).click();
   await page.emulateMedia({colorScheme:'dark',reducedMotion:'reduce'});
   await page.setViewportSize({width:390,height:460});
   await expect(page.getByRole('main').getByRole('textbox',{name:'Message',exact:true})).toBeVisible();

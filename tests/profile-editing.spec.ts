@@ -27,7 +27,11 @@ class ProfileFixture {
   mode: 'ok' | 'reject' | 'lost-uncommitted' | 'hold' = 'ok';
   getOutage = false;
   release: (() => void) | null = null;
-  state(owner: string): ChatState { const user = structuredClone(this.users.get(owner)!); return { user, conversations: [{ id: '00000000-0000-4000-8000-000000000333', kind: 'space', name: owner === ownerA ? 'First profile workspace' : 'Second profile workspace', members: [user], unread: 0, updatedAt: '2026-10-06T00:00:00Z' }], messages: [] }; }
+  holdReads = false;
+  genericActions: { owner: string; action: Extract<ChatAction, { type: 'read' }> & { clientActionId?: string } }[] = [];
+  genericSettled = 0;
+  unreadByOwner = new Map<string, number>();
+  state(owner: string): ChatState { const user = structuredClone(this.users.get(owner)!); return { user, conversations: [{ id: '00000000-0000-4000-8000-000000000333', kind: 'space', name: owner === ownerA ? 'First profile workspace' : 'Second profile workspace', members: [user], unread: this.unreadByOwner.get(owner) || 0, updatedAt: '2026-10-06T00:00:00Z' }], messages: [] }; }
 }
 const activeFixtures = new WeakMap<Page, ProfileFixture>();
 test.afterEach(async ({ page }) => { activeFixtures.get(page)?.release?.(); });
@@ -51,7 +55,16 @@ async function fixture(page: Page, context: BrowserContext) {
         const actionId = url.searchParams.get('clientActionId');
         return route.fulfill({ json: { state: api.state(owner), ...(actionId && api.receipts.has(`${owner}:${actionId}`) ? { actionId } : {}) } });
       }
-      const action = request.postDataJSON() as ProfileAction;
+      const action = request.postDataJSON() as ChatAction & { clientActionId?: string };
+      if (action.type === 'read' && api.holdReads) {
+        api.genericActions.push({ owner, action: structuredClone(action) });
+        await new Promise<void>(resolve => { api.release = resolve; });
+        api.unreadByOwner.set(owner, action.unread ? 1 : 0);
+        if (action.clientActionId) api.receipts.add(`${owner}:${action.clientActionId}`);
+        try { return await route.fulfill({ json: { state: api.state(owner) } }); }
+        catch { return; }
+        finally { api.genericSettled += 1; }
+      }
       if (action.type !== 'profile') return route.fulfill({ json: { state: api.state(owner) } });
       api.actions.push({ owner, action: structuredClone(action) });
       if (api.mode === 'reject') return route.fulfill({ status: 400, json: { error: 'Synthetic profile rejection. Your edits are not saved.' } });
@@ -75,11 +88,11 @@ async function fixture(page: Page, context: BrowserContext) {
   await expect(nameInput(page)).toHaveValue('First profile person');
   return api;
 }
-async function switchAccount(context: BrowserContext) {
+async function switchAccount(context: BrowserContext, target = b) {
   const tab = await context.newPage(), nonce = '00000000-0000-4000-8000-000000000666';
   await tab.routeWebSocket(`${provider.replace('https:', 'wss:')}/**`, socket => socket.close());
   await tab.addInitScript(({ nonce, key }) => sessionStorage.setItem(key, JSON.stringify({ nonce, createdAt: Date.now() })), { nonce, key: LOGIN_REQUEST_KEY });
-  const hash = new URLSearchParams({ access_token: b.access_token, refresh_token: b.refresh_token, expires_in: '3600', token_type: 'bearer' });
+  const hash = new URLSearchParams({ access_token: target.access_token, refresh_token: target.refresh_token, expires_in: '3600', token_type: 'bearer' });
   await tab.goto(`${base}/?${LOGIN_NONCE_QUERY}=${nonce}#${hash}`); await expect(tab.locator('.app-shell')).toBeVisible();
   return tab;
 }
@@ -207,4 +220,92 @@ test('an older availability acknowledgement cannot close or toast over a newer p
   await expect(nameInput(page)).toHaveValue('New profile after availability'); await expect(statusInput(page)).toHaveValue('Unsaved newer profile status');
   await expect(page.locator('.toast').filter({ hasText: 'Status set to Away' })).toHaveCount(0);
   expect(api.actions).toHaveLength(1);
+});
+
+for (const flow of ['open-unread', 'mark-all', 'open-unread-return-to-owner'] as const) {
+  test(`generic ${flow} completion cannot toast into a later SDK account generation`, async ({ page, context }) => {
+    const api = await fixture(page, context);
+    api.holdReads = true;
+    api.unreadByOwner.set(ownerA, 1);
+    await page.reload();
+    await expect(page.getByRole('navigation').getByRole('button', { name: 'Home', exact: true }).locator('.nav-count')).toHaveText('1');
+    if (flow === 'mark-all') {
+      await page.getByRole('button', { name: 'More Home actions', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'Mark all conversations read', exact: true }).click();
+    } else {
+      await page.getByRole('complementary', { name: 'Chat navigation', exact: true }).getByRole('button', { name: 'First profile workspace', exact: true }).click();
+    }
+    await expect.poll(() => api.genericActions.length).toBe(1);
+    await expect.poll(() => !!api.release).toBe(true);
+    await page.evaluate(() => {
+      const record = window as unknown as { genericToastHistory: string[] };
+      record.genericToastHistory = [];
+      new MutationObserver(() => {
+        const text = document.querySelector('.toast')?.textContent;
+        if (text) record.genericToastHistory.push(text);
+      }).observe(document.body, { childList: true, subtree: true, characterData: true });
+    });
+    const tabs = [await switchAccount(context)];
+    try {
+      await open(page);
+      await expect(nameInput(page)).toHaveValue('Second profile person');
+      if (flow === 'open-unread-return-to-owner') {
+        tabs.push(await switchAccount(context, a));
+        await open(page);
+        await expect(nameInput(page)).toHaveValue('First profile person');
+      }
+      await nameInput(page).fill('Current generation draft remains editable');
+      await statusInput(page).fill('Current generation custom status');
+      api.release!();
+      await expect.poll(() => api.genericSettled).toBe(1);
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await expect(dialog(page)).toBeVisible();
+      await expect(nameInput(page)).toHaveValue('Current generation draft remains editable');
+      await expect(statusInput(page)).toHaveValue('Current generation custom status');
+      const history = await page.evaluate(() => (window as unknown as { genericToastHistory: string[] }).genericToastHistory);
+      expect(history.filter(text => /Your account changed|All conversations marked as read|Unable to complete/.test(text))).toEqual([]);
+      await expect(page.locator('.toast')).toHaveCount(0);
+      expect(api.genericActions).toHaveLength(1);
+      expect(api.genericActions[0].owner).toBe(ownerA);
+      expect(api.genericActions[0].action.type).toBe('read');
+    } finally {
+      api.release?.();
+      for (const tab of tabs) await tab.close();
+    }
+  });
+}
+
+test('failed avatar images fall back to initials and retry when the URL changes', async ({ page, context }) => {
+  const api = await fixture(page, context);
+  const prefix = 'https://lh3.googleusercontent.com/profile-fallback-local';
+  const requested: string[] = [];
+  await page.route(`${prefix}*`, route => {
+    const url = route.request().url(); requested.push(url);
+    return url.endsWith('-valid.png')
+      ? route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOioAAAAASUVORK5CYII=', 'base64') })
+      : route.fulfill({ status: 404, contentType: 'text/plain', body: 'Missing local fixture image' });
+  });
+  const avatar = page.locator('.app-topbar').getByRole('button', { name: 'Your profile', exact: true }).locator(':scope > .avatar');
+  const profileAvatar = dialog(page).locator('.avatar.large');
+  const refreshAvatar = async (url: string) => {
+    api.users.get(ownerA)!.avatar = url;
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await expect.poll(() => requested.includes(url)).toBe(true);
+  };
+  const initialBox = await avatar.boundingBox();
+  await refreshAvatar(`${prefix}-missing.png`);
+  await expect(avatar.locator('img')).toHaveCount(0);
+  await expect(avatar).toHaveText('FP');
+  await expect(profileAvatar).toHaveText('FP');
+  const failedBox = await avatar.boundingBox();
+  expect(failedBox!.width).toBe(initialBox!.width); expect(failedBox!.height).toBe(initialBox!.height);
+  await refreshAvatar(`${prefix}-valid.png`);
+  await expect(avatar.locator('img')).toHaveJSProperty('naturalWidth', 1);
+  await expect(profileAvatar.locator('img')).toHaveJSProperty('naturalWidth', 1);
+  api.users.get(ownerA)!.avatar = `${prefix}-missing-again.png`;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => requested.includes(`${prefix}-missing-again.png`)).toBe(true);
+  await expect(avatar).toHaveText('FP');
+  await expect(avatar.locator('img')).toHaveCount(0);
+  await expect(nameInput(page)).toHaveValue('First profile person');
 });

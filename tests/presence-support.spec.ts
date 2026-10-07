@@ -1,4 +1,5 @@
 import { expect, test, type Locator } from "@playwright/test";
+import { createDemoState, DEMO_STORAGE_KEY } from "../src/lib/demo";
 
 async function readable(controls: Locator) {
   const values = await controls.evaluateAll((nodes) =>
@@ -135,3 +136,47 @@ test("compact dark support menu opens real guidance, installation and appearance
       .getByRole("combobox", { name: "Appearance", exact: true }),
   ).toHaveValue("dark");
 });
+
+for (const status of ["Available", "Active", "Away", "Do not disturb", "Focusing", "Invited", undefined]) {
+  test(`DM avatars qualify saved availability for ${status ?? "unknown status"} across sidebar, Home and header`, async ({ page }) => {
+    const state = createDemoState();
+    for (const conversation of state.conversations) {
+      for (const member of conversation.members) if (member.id === "demo-maya") member.status = status;
+    }
+    for (const message of state.messages) if (message.author.id === "demo-maya") message.author.status = status;
+    const label = status && ["Available", "Active", "Away", "Do not disturb"].includes(status)
+      ? `Saved availability: ${status}` : null;
+    const kind = status === "Away" ? "away" : status === "Do not disturb" ? "dnd" : "active";
+    await page.evaluate(({ key, state }) => localStorage.setItem(key, JSON.stringify(state)), { key: DEMO_STORAGE_KEY, state });
+    await page.reload();
+    const navigation = page.getByRole("complementary", { name: "Chat navigation", exact: true });
+    const peer = navigation.getByRole("button", { name: "Maya Chen", exact: true });
+    const assertIndicator = async (container: Locator, theme: "light" | "dark") => {
+      const indicators = container.locator("[data-saved-availability]");
+      await expect(container).toHaveCount(1);
+      await expect(indicators).toHaveCount(label ? 1 : 0);
+      await expect(container.locator(".online-dot")).toHaveCount(0);
+      if (!label) return;
+      const indicator = container.getByRole("img", { name: label, exact: true });
+      await expect(indicator).toHaveAttribute("data-saved-availability", kind);
+      await expect(indicator).toHaveAttribute("title", label);
+      await expect(indicator).toHaveCSS("background-color", kind === "away" ? "rgb(249, 171, 0)"
+        : kind === "dnd" ? theme === "dark" ? "rgb(242, 139, 130)" : "rgb(217, 48, 37)"
+          : theme === "dark" ? "rgb(129, 201, 149)" : "rgb(24, 128, 56)");
+    };
+    for (const theme of ["light", "dark"] as const) {
+      await page.getByRole("button", { name: "Settings", exact: true }).click();
+      await page.getByRole("dialog", { name: "Settings", exact: true }).getByRole("combobox", { name: "Appearance", exact: true }).selectOption(theme);
+      await page.keyboard.press("Escape");
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      await assertIndicator(peer, theme);
+      await page.getByRole("navigation").getByRole("button", { name: "Home", exact: true }).click();
+      const row = page.locator(".home-view .conversation-row").filter({ hasText: "Maya Chen" });
+      await assertIndicator(row, theme);
+      await peer.click();
+      const header = page.getByRole("region", { name: "Conversation", exact: true }).locator(".conversation-header");
+      await assertIndicator(header, theme);
+      await expect(header.locator(":scope > .avatar")).toHaveCount(1);
+    }
+  });
+}

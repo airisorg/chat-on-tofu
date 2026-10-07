@@ -7,6 +7,7 @@ const main = (page: Page) => page.getByRole('main');
 async function demo(page: Page) {
   await page.goto('/');
   await page.getByRole('button', { name: 'Explore demo', exact: true }).click();
+  await nav(page).getByRole('button', { name: 'Design team', exact: true }).click();
   await expect(main(page).getByRole('textbox', { name: 'Message', exact: true })).toBeVisible();
 }
 

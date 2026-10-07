@@ -9,6 +9,11 @@ test('actual MediaRecorder captures beyond one minute and preserves playable aud
   await context.grantPermissions(['microphone'], { origin: new URL(baseURL!).origin });
   await page.goto('/');
   await page.getByRole('button', { name: 'Explore demo', exact: true }).click();
+  // Explicitly select the tested conversation independently of the initial
+  // or default view before recording.
+  const navigation = page.getByRole('complementary', { name: 'Chat navigation' });
+  await navigation.getByRole('button', { name: 'Design team', exact: true }).click();
+  await expect(page.getByRole('main').getByRole('textbox', { name: 'Message', exact: true })).toBeVisible();
   await page.getByRole('main').getByRole('button', { name: 'Record voice note', exact: true }).click();
   const recording = page.getByRole('dialog', { name: 'Record a voice note', exact: true });
   await recording.getByRole('button', { name: 'Start recording', exact: true }).click();
@@ -34,6 +39,7 @@ test('actual MediaRecorder captures beyond one minute and preserves playable aud
   await page.getByRole('main').getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(page.getByRole('main').getByRole('link', { name: /Voice message\.(m4a|webm|ogg)/ })).toBeVisible();
   await page.reload();
+  await navigation.getByRole('button', { name: 'Design team', exact: true }).click();
   await expect(page.getByRole('main').getByRole('link', { name: /Voice message\.(m4a|webm|ogg)/ })).toBeVisible();
   console.log(JSON.stringify({ capture: 'real-time synthetic microphone', savedBytes: buffer.length, mime, path }));
 });

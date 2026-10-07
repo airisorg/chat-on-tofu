@@ -92,13 +92,14 @@ export default function SearchFilters({
     </button>
   );
   const option = (
+    key: string,
     label: string,
     selected: boolean,
     click: () => void,
     secondary?: string,
   ) => (
     <button
-      key={label}
+      key={key}
       type="button"
       className={selected ? styles.selected : ""}
       aria-pressed={selected}
@@ -219,16 +220,17 @@ export default function SearchFilters({
                   onChange={(event) => setFind(event.target.value)}
                 />
                 {open.menu === "from"
-                  ? option("Anyone", !values.fromId, () =>
+                  ? option("from:any", "Anyone", !values.fromId, () =>
                       choose({ fromId: "" }),
                     )
-                  : option("All conversations", !values.conversationId, () =>
+                  : option("conversation:all", "All conversations", !values.conversationId, () =>
                       choose({ conversationId: "" }),
                     )}
                 <div className={styles.options}>
                   {open.menu === "from"
                     ? candidates.map((person) =>
                         option(
+                          `from:${person.id}`,
                           person.name,
                           values.fromId === person.id,
                           () => choose({ fromId: person.id }),
@@ -237,6 +239,7 @@ export default function SearchFilters({
                       )
                     : places.map((conversation) =>
                         option(
+                          `conversation:${conversation.id}`,
                           conversation.name,
                           values.conversationId === conversation.id,
                           () => choose({ conversationId: conversation.id }),
@@ -260,11 +263,12 @@ export default function SearchFilters({
               <>
                 {!custom &&
                   dates.map(([date, label]) =>
-                    option(label, values.date === date, () =>
+                    option(`date:${date}`, label, values.date === date, () =>
                       choose({ date, after: "", before: "" }),
                     ),
                   )}
                 {option(
+                  "date:custom",
                   custom ? "Choose a date preset" : "Custom range",
                   values.date === "custom",
                   () => {
@@ -332,14 +336,14 @@ export default function SearchFilters({
             )}
             {open.menu === "file" &&
               fileTypes.map(([file, label]) =>
-                option(label, values.file === file, () => choose({ file })),
+                option(`file:${file}`, label, values.file === file, () => choose({ file })),
               )}
             {open.menu === "sort" && (
               <>
-                {option("Most recent", values.sort === "recent", () =>
+                {option("sort:recent", "Most recent", values.sort === "recent", () =>
                   choose({ sort: "recent" }),
                 )}
-                {option("Relevance", values.sort === "relevance", () =>
+                {option("sort:relevance", "Relevance", values.sort === "relevance", () =>
                   choose({ sort: "relevance" }),
                 )}
                 <p className={styles.note}>

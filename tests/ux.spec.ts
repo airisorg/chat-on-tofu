@@ -20,6 +20,9 @@ const mobileNav = (page: Page) =>
     includeHidden: true,
   });
 const main = (page: Page) => page.getByRole("main");
+const homeRow = (page: Page, name: "Maya Chen" | "Design team") => page.locator(".home-view .conversation-row").filter({
+  has: page.locator(".conversation-row-content > strong").filter({ hasText: name === "Maya Chen" ? /^Maya Chen$/ : /^Design team$/ }),
+});
 const dialog = (page: Page, name: string) =>
   page.getByRole("dialog", { name, exact: true });
 
@@ -108,6 +111,12 @@ test("welcome presents Google sign-in and explicitly starts the demo", async ({
   ).toBeVisible();
   await page.getByRole("button", { name: "Explore demo", exact: true }).click();
   await expect(page.getByText("DEMO WORKSPACE", { exact: true })).toBeVisible();
+  await expect(main(page).getByRole("heading", { name: "Design team", exact: true })).toBeVisible();
+  await expect(main(page).getByRole("textbox", { name: "Message", exact: true })).toBeVisible();
+  await sidebar(page).getByRole("button", { name: "Home", exact: true }).click();
+  await expect(main(page).getByRole("heading", { name: "Home", exact: true })).toBeVisible();
+  await expect(main(page).getByRole("textbox", { name: "Message", exact: true })).toHaveCount(0);
+  await openDesign(page);
   await expect(
     main(page).getByRole("textbox", { name: "Message", exact: true }),
   ).toBeVisible();
@@ -118,6 +127,7 @@ test("desktop navigation and message search open the matching conversation", asy
   page,
 }) => {
   await startDemo(page);
+  await openDesign(page);
   const heading = main(page).getByRole("heading", {
     name: "Design team",
     exact: true,
@@ -155,24 +165,29 @@ test("desktop navigation and message search open the matching conversation", asy
   await expect(
     main(page).getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
-  await main(page)
-    .getByRole("button", { name: "Direct messages", exact: true })
-    .click();
+  const options = main(page).getByRole("button", { name: "More Home actions", exact: true });
+  await options.click();
+  await page.getByRole("menu", { name: "More Home actions", exact: true })
+    .getByRole("menuitemradio", { name: "Direct messages", exact: true }).click();
   await expect(
-    main(page).getByRole("heading", { name: "Direct messages", exact: true }),
+    main(page).getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
+  await expect(homeRow(page, "Maya Chen")).toBeVisible();
+  await expect(homeRow(page, "Design team")).toHaveCount(0);
+  await options.click();
+  const homeMenu = page.getByRole("menu", { name: "More Home actions", exact: true });
+  await expect(homeMenu.getByRole("menuitemradio", { name: "Direct messages", exact: true })).toHaveAttribute("aria-checked", "true");
+  await homeMenu.getByRole("menuitemradio", { name: "Spaces", exact: true }).click();
   await expect(
-    main(page)
-      .getByRole("button", { name: /Maya Chen/ })
-      .first(),
+    main(page).getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
-  await sidebar(page)
-    .getByRole("button", { name: "Home", exact: true })
-    .click();
-  await main(page).getByRole("button", { name: "Spaces", exact: true }).click();
-  await expect(
-    main(page).getByRole("heading", { name: "Spaces", exact: true }),
-  ).toBeVisible();
+  await expect(homeRow(page, "Design team")).toBeVisible();
+  await expect(homeRow(page, "Maya Chen")).toHaveCount(0);
+  await options.click();
+  await expect(homeMenu.getByRole("menuitemradio", { name: "Spaces", exact: true })).toHaveAttribute("aria-checked", "true");
+  await homeMenu.getByRole("menuitem", { name: "All conversations", exact: true }).click();
+  await expect(homeRow(page, "Maya Chen")).toBeVisible();
+  await expect(homeRow(page, "Design team")).toBeVisible();
   await openDesign(page);
   const text = "Searchable acceptance note for the design review";
   await sendMessage(page, text);
@@ -283,6 +298,9 @@ test("reactions, thread replies and starred messages survive reload", async ({
   const row = await sendMessage(page, text);
   await row.hover();
   await row.getByRole("button", { name: "Add reaction", exact: true }).click();
+  await dialog(page, "Add a reaction")
+    .getByRole("textbox", { name: "Search emoji", exact: true })
+    .fill("🎉");
   await dialog(page, "Add a reaction")
     .getByRole("button", { name: "React 🎉", exact: true })
     .click();

@@ -181,6 +181,37 @@ test.describe("dark phone media", () => {
     isMobile: true,
     colorScheme: "dark",
   });
+  test("malformed image fallback keeps an actionable 44px download and exact original bytes", async ({ page }, testInfo) => {
+    // Valid PNG signature, deliberately truncated before a decodable image.
+    // This exercises the real browser image-error path, not a synthetic error.
+    const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+    const main = page.getByRole("main");
+    await main.locator(".composer-wrap input[type=file]").setInputFiles({
+      name: "Truncated-image.png", mimeType: "image/png", buffer: bytes,
+    });
+    await main.getByRole("textbox", { name: "Message", exact: true }).fill("Malformed image touch target acceptance");
+    await main.getByRole("button", { name: "Send message", exact: true }).click();
+    const row = main.getByRole("article").filter({ hasText: "Malformed image touch target acceptance" });
+    await expect(row.getByText("Image preview unavailable. Download the original file.", { exact: true })).toBeVisible();
+    const download = row.getByRole("link", { name: "Download Truncated-image.png", exact: true });
+    await download.scrollIntoViewIfNeeded();
+    const bounds = (await download.boundingBox())!;
+    expect(bounds.width).toBeGreaterThanOrEqual(44);
+    expect(bounds.height).toBeGreaterThanOrEqual(44);
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+    expect(await download.evaluate(node => {
+      const r = node.getBoundingClientRect();
+      return node.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+    })).toBe(true);
+    const downloading = page.waitForEvent("download");
+    await download.click();
+    const original = await downloading;
+    expect(original.suggestedFilename()).toBe("Truncated-image.png");
+    const path = testInfo.outputPath("truncated-image-original.png");
+    await original.saveAs(path);
+    expect(readFileSync(path).equals(bytes)).toBe(true);
+  });
   test("audio controls retain 44px targets and clean image tiles open a downloadable preview", async ({
     page,
   }, testInfo) => {

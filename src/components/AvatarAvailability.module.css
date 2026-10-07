@@ -1,0 +1,25 @@
+.indicator {
+  width: 11px;
+  height: 11px;
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  border-radius: 50%;
+  border: 2px solid var(--shell);
+}
+
+.active {
+  background: var(--green);
+}
+
+.away {
+  background: #f9ab00;
+}
+
+.dnd {
+  background: #d93025;
+}
+
+:global(:root[data-theme="dark"]) .dnd {
+  background: #f28b82;
+}

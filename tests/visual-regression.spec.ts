@@ -20,8 +20,12 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(page.getByRole('main').getByRole('heading', { name: 'Home', exact: true })).toBeVisible();
     // A screenshot of the old toolbar without these controls cannot establish
     // that the current composed Home toolbar is ready or fits.
-    await expect(page.locator('.home-header').getByRole('button', { name: 'Split pane mode', exact: true })).toHaveCount(1);
-    await expect(page.locator('.home-filter-tabs').getByRole('checkbox', { name: 'Threads', exact: true })).toHaveCount(1);
+    const header = page.locator('.home-header');
+    const splitAvailable = await page.evaluate(() => innerWidth >= 1200 && innerHeight > 500 && !matchMedia('(pointer: coarse)').matches);
+    await expect(header.getByRole('button', { name: 'More Home actions', exact: true })).toHaveCount(1);
+    await expect(header.getByRole('button', { name: 'Home view options', exact: true })).toHaveCount(splitAvailable ? 1 : 0);
+    await expect(header.getByRole('button', { name: 'Split pane', exact: true })).toHaveCount(splitAvailable ? 1 : 0);
+    await expect(page.locator('.home-header').getByRole('checkbox', { name: 'Threads', exact: true })).toHaveCount(1);
     await expect.soft(nav).toHaveScreenshot(`navigation-${theme}.png`);
     await expect.soft(page.getByRole('main')).toHaveScreenshot(`home-${theme}.png`);
   });

@@ -93,13 +93,18 @@
   padding: 1px 4px 1px 14px;
 }
 .chip > span {
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .chip button {
   display: grid;
   place-items: center;
   width: 44px;
+  min-width: 44px;
+  flex-shrink: 0;
   height: 44px;
   padding: 0;
   border: 0;

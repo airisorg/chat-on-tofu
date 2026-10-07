@@ -151,8 +151,7 @@ h3,
 .status-button,
 .menu-list,
 .dialog label,
-.kind-tabs,
-.home-filter-tabs {
+.kind-tabs {
   font-family: var(--font-title);
 }
 img {
@@ -249,16 +248,6 @@ button:hover {
   width: 74px;
   height: 74px;
   font-size: 26px;
-}
-.online-dot {
-  width: 11px;
-  height: 11px;
-  position: absolute;
-  bottom: -1px;
-  right: -1px;
-  border-radius: 50%;
-  background: var(--green);
-  border: 2px solid var(--shell);
 }
 .space-avatar {
   width: 40px;
@@ -980,7 +969,7 @@ button:hover {
   font-size: 17px;
   border-radius: 50%;
 }
-@media (max-width: 767px), (pointer: coarse) {
+@media (max-width: 799px), (pointer: coarse) {
   .quick-reactions { display: none; }
 }
 .reaction-list {
@@ -1293,47 +1282,16 @@ button:hover {
 .filter-button.active .filter-dot {
   background: var(--blue);
 }
-.home-filter-tabs {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 30px 14px;
-  overflow-x: auto;
-  scrollbar-width: thin;
-}
-.home-filter-tabs > button {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-.home-filter-tabs > button:focus-visible,
 .filter-button:focus-visible {
-  /* Scrolling clips outer outlines; contain the keyboard ring in the control. */
+  /* Contain the keyboard ring in the control. */
   outline-offset: -2px;
 }
-.home-filter-tabs > button:not(.icon-button) {
-  border-radius: 16px;
-  font: 500 14px / 20px var(--font-title);
-  letter-spacing: normal;
-  min-height: 32px;
-  padding: 5px 12px;
-  border: 1px solid var(--line);
-}
-.filter-button > svg,
-.home-filter-tabs > button:not(.icon-button) > svg {
+.filter-button > svg {
   width: 18px;
   height: 18px;
 }
-.home-filter-tabs > button.selected {
-  background: var(--blue-soft);
-  border-color: var(--blue-soft);
-  color: #1e446c;
-}
-.home-filter-tabs > .icon-button {
-  margin-left: auto;
-  width: 32px;
-  height: 32px;
-}
 .conversation-list {
+  flex: 1;
   overflow-y: auto;
   min-height: 0;
   padding: 0 22px 24px;
@@ -1764,9 +1722,6 @@ button:hover {
   font-weight: 500;
 }
 @media (max-width: 767px), (pointer: coarse) {
-  .home-filter-tabs > button {
-    min-width: 44px;
-  }
   .conversation-intro .text-button {
     min-height: 44px;
   }
@@ -1847,6 +1802,9 @@ button:hover {
   color: var(--muted);
 }
 .setting-row select {
+  /* Keep native option metrics from shifting this control between renders. */
+  width: 92px;
+  flex-shrink: 0;
   border: 1px solid var(--line);
   padding: 10px 11px;
   border-radius: 8px;
@@ -1946,8 +1904,8 @@ button:hover {
   border-radius: 13px;
   text-align: left;
   color: var(--muted);
-  font-size: 10px;
-  line-height: 1.7;
+  font-size: 12px;
+  line-height: 20px;
 }
 .menu-list {
   display: flex;
@@ -2660,19 +2618,6 @@ button:hover {
     outline: none !important;
     font-size: 16px;
     padding: 12px 0;
-  }
-  .home-filter-tabs {
-    margin: 0 19px 11px;
-    gap: 6px;
-  }
-  .home-filter-tabs > button:not(.icon-button) {
-    min-height: 32px;
-    padding: 5px 12px;
-  }
-  .home-filter-tabs > .icon-button {
-    margin-left: auto;
-    width: 31px;
-    height: 32px;
   }
   .conversation-list {
     padding: 0 12px 83px;
@@ -3390,12 +3335,6 @@ button:hover {
     font-size: 10px;
     max-width: 200px;
   }
-  .home-filter-tabs {
-    gap: 4px;
-  }
-  .home-filter-tabs > button:not(.icon-button) {
-    padding: 5px 12px;
-  }
   .conversation-row-content strong {
     font-size: 12px;
   }
@@ -3537,13 +3476,6 @@ button:hover {
   .filter-button {
     min-height: 44px;
   }
-  .home-filter-tabs > button:not(.icon-button) {
-    min-height: 44px;
-  }
-  .home-filter-tabs > .icon-button {
-    width: 44px;
-    height: 44px;
-  }
   .conversation-header-actions > .icon-button {
     width: 44px;
     height: 44px;
@@ -3604,17 +3536,6 @@ button:hover {
 .message-highlight {
   background: var(--blue-soft) !important;
   transition: background 0.4s;
-}
-.home-filter-tabs > button:not(.icon-button) {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-@media (max-width: 799px),
-  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
-  .home-filter-tabs > button:nth-child(4) {
-    display: none;
-  }
 }
 @media (max-width: 799px),
   (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
@@ -3757,7 +3678,6 @@ button:hover {
 :root[data-theme="dark"] .sidebar-conversation.selected,
 :root[data-theme="dark"] .rail-chat,
 :root[data-theme="dark"] .new-chat-button,
-:root[data-theme="dark"] .home-filter-tabs > button.selected,
 :root[data-theme="dark"] .mobile-tabs > button.active,
 :root[data-theme="dark"] .invitation-welcome {
   color: var(--ink);
@@ -3881,9 +3801,6 @@ button:hover {
   .mobile-search input {
     padding-top: 10px;
     padding-bottom: 10px;
-  }
-  .home-filter-tabs {
-    margin-bottom: 4px;
   }
   .conversation-row {
     min-height: 64px;
@@ -4072,13 +3989,6 @@ button:hover {
     width: 20px;
     height: 20px;
   }
-  .home-view:has(> .home-filter-tabs) {
-    display: grid;
-    /* The title, Unread state and split toggle must reserve their actual width.
-       A fixed column lets these controls overlap the adjacent All filter. */
-    grid-template-columns: max-content minmax(0, 1fr);
-    grid-template-rows: 64px minmax(0, 1fr);
-  }
   .home-header {
     min-width: 0;
     min-height: 64px;
@@ -4089,26 +3999,6 @@ button:hover {
   }
   .home-header p {
     display: none;
-  }
-  .home-view:has(> .home-filter-tabs) > .home-header {
-    grid-column: 1;
-    grid-row: 1;
-  }
-  .home-filter-tabs {
-    grid-column: 2;
-    grid-row: 1;
-    min-width: 0;
-    overflow-x: auto;
-    margin: 0 16px 0 0;
-    scrollbar-width: thin;
-  }
-  .home-filter-tabs > button {
-    flex-shrink: 0;
-    white-space: nowrap;
-  }
-  .home-view:has(> .home-filter-tabs) > .conversation-list {
-    grid-column: 1 / -1;
-    grid-row: 2;
   }
   .conversation-list {
     padding: 0 16px 24px;
@@ -4252,7 +4142,7 @@ button:hover {
   clip-path: inset(50%);
   white-space: nowrap;
 }
-@media (max-width: 767px), (pointer: coarse) {
+@media (max-width: 799px), (pointer: coarse) {
   .message.dm-own .message-meta {
     min-height: 36px;
     padding-right: 44px;
@@ -4267,12 +4157,7 @@ button:hover {
   .sidebar-shortcuts-heading {
     min-height: 44px;
   }
-  .home-filter-tabs > button:not(.icon-button),
   .filter-button {
     min-height: 44px;
-  }
-  .home-filter-tabs > .icon-button {
-    width: 44px;
-    height: 44px;
   }
 }

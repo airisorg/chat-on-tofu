@@ -1,0 +1,218 @@
+.header:global(.home-header) {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  min-width: 0;
+  min-height: 64px;
+  gap: 8px 16px;
+  padding: 16px 24px;
+}
+.header:global(.home-header) > h1 {
+  margin: 0;
+}
+.controls {
+  --switch-track: #dfe3e7;
+  --switch-thumb: #fff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  max-width: 100%;
+  flex-shrink: 0;
+}
+.controls > button,
+.layoutGroup > button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 32px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font: 500 14px / 20px var(--font-title);
+  letter-spacing: normal;
+  color: var(--ink);
+}
+.controls > button:focus-visible,
+.layoutGroup > button:focus-visible,
+.summary > button:focus-visible,
+.menu > button:focus-visible {
+  outline-offset: -2px;
+}
+.controls > button:hover,
+.layoutGroup > button:hover,
+.summary > button:hover,
+.menu > button:hover {
+  background: var(--hover);
+}
+.controls > .unread {
+  gap: 8px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-weight: 400;
+}
+.track {
+  display: flex;
+  align-items: center;
+  width: 40px;
+  height: 24px;
+  padding: 2px;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  background: var(--switch-track);
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+.thumb {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--switch-thumb);
+  color: var(--blue);
+  transform: translateX(0);
+  transition: transform 150ms ease, background-color 150ms ease;
+}
+.trackOn {
+  border-color: var(--selected);
+  background: var(--selected);
+}
+.trackOn .thumb {
+  background: var(--surface);
+  transform: translateX(12px);
+}
+.thread {
+  border: 1px solid transparent;
+  border-radius: 16px;
+  background: var(--hover);
+  padding: 5px 10px;
+}
+:global([data-theme="dark"]) .controls {
+  --switch-track: #5f6368;
+  --switch-thumb: #e3e3e3;
+}
+.layoutGroup {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  border-radius: 16px;
+  background: var(--hover);
+}
+.layoutGroup > button {
+  padding: 4px;
+}
+.layoutToggle {
+  min-width: 32px;
+  border-radius: 16px 0 0 16px;
+}
+.layoutDropdown {
+  min-width: 28px;
+  border-radius: 0 16px 16px 0;
+}
+.controls > .actions {
+  min-width: 32px;
+  padding: 4px;
+  border-radius: 50%;
+}
+.controls > .selected {
+  background: var(--blue-soft);
+  border-color: var(--blue-soft);
+  color: var(--ink);
+}
+.summary {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+  padding: 0 24px 8px;
+  color: var(--muted);
+  font: 400 14px / 20px var(--font-title);
+}
+.summary > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.summary > button {
+  min-height: 32px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  color: var(--blue);
+  font: 500 14px / 20px var(--font-title);
+}
+.menu {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-title);
+}
+.menu > button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 32px;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 4px;
+  color: var(--ink);
+  text-align: left;
+  font: 400 14px / 20px var(--font-title);
+}
+.menu > button > svg {
+  flex: 0 0 auto;
+}
+.menu > button > span {
+  flex: 1;
+  min-width: 0;
+}
+/* The captured Google two-mode menu is about 200px wide with 40px rows.
+   Keep its compact scope separate from the longer app actions menu. */
+.viewPanel[data-context-popover] {
+  width: 200px;
+  padding: 8px 0;
+  background: var(--surface-soft);
+}
+.viewMenu > button {
+  min-height: 40px;
+  padding: 10px 12px;
+  border-radius: 0;
+}
+.viewMenu > button[aria-checked="true"] {
+  background: var(--hover);
+}
+.check {
+  visibility: hidden;
+}
+.menu > button[aria-checked="true"] .check {
+  visibility: visible;
+}
+.divider {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--line);
+}
+@media (max-width: 799px), (pointer: coarse) {
+  .header:global(.home-header) {
+    padding: 12px 16px;
+  }
+  .controls > button,
+  .layoutGroup > button,
+  .summary > button,
+  .menu > button {
+    min-height: 44px;
+  }
+  .controls > .actions,
+  .layoutGroup > button {
+    min-width: 44px;
+  }
+  .summary {
+    padding-inline: 16px;
+  }
+  .menu > button {
+    padding-block: 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .track,
+  .thumb {
+    transition-duration: 0s;
+  }
+}

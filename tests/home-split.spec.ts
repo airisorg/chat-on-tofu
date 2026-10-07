@@ -93,10 +93,10 @@ test('switch, close, reopen and send keep drafts with the correct conversation',
   await expect(input(page)).toHaveValue('Only for Maya');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(input(page)).toHaveValue('');
-  await expect(page.getByRole('region', { name: 'Conversation preview' }).getByText('Only for Maya', { exact: true })).toHaveCount(1);
+  await expect(page.getByRole('region', { name: 'Conversation preview', exact: true }).getByText('Only for Maya', { exact: true })).toHaveCount(1);
   await row(page, 'Jordan Lee').click();
   await expect(input(page)).toHaveValue('Only for Jordan');
-  await expect(page.getByRole('region', { name: 'Conversation preview' }).getByText('Only for Maya', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Conversation preview', exact: true }).getByText('Only for Maya', { exact: true })).toHaveCount(0);
   await row(page, 'Maya Chen').click();
   await expect(input(page)).toHaveValue('');
 });
@@ -131,20 +131,27 @@ test('resize keeps one composer, draft, attachments and full phone navigation', 
 
 test('split preference survives reload and sidebar opens the full conversation', async ({ page }) => {
   await fixture(page);
-  const toggle = page.getByRole('button', { name: 'Split pane mode', exact: true });
-  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  const options = page.getByRole('button', { name: 'Home view options', exact: true });
+  const split = page.getByRole('menuitemradio', { name: 'Split pane', exact: true });
+  const single = page.getByRole('menuitemradio', { name: 'Single pane', exact: true });
+  await options.click();
+  await expect(split).toHaveAttribute('aria-checked', 'true');
+  await expect(single).toHaveAttribute('aria-checked', 'false');
+  await page.keyboard.press('Escape');
   await row(page, 'Maya Chen').click();
   await input(page).fill('Keep when disabling preview');
-  await toggle.click();
+  await options.click(); await single.click();
   await expect(input(page)).toHaveCount(0);
   await page.reload();
   await page.getByRole('navigation').getByRole('button', { name: 'Home', exact: true }).click();
-  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await options.click(); await expect(split).toHaveAttribute('aria-checked', 'false');
+  await expect(single).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('Escape');
   await row(page, 'Maya Chen').click();
   await expect(home(page)).toHaveCount(0);
   await expect(input(page)).toHaveValue('Keep when disabling preview');
   await page.getByRole('navigation').getByRole('button', { name: 'Home', exact: true }).click();
-  await toggle.click();
+  await options.click(); await split.click();
   await page.getByRole('complementary', { name: 'Chat navigation' }).getByRole('button', { name: 'Maya Chen', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Close conversation preview' })).toHaveCount(0);
   await expect(input(page)).toHaveValue('Keep when disabling preview');
@@ -154,7 +161,7 @@ test('space preview opens a thread and returns without duplicating or losing the
   await fixture(page);
   await row(page, 'Design team').click();
   await input(page).fill('space draft');
-  const first = page.getByRole('region', { name: 'Conversation preview' }).locator('article').first();
+  const first = page.getByRole('region', { name: 'Conversation preview', exact: true }).locator('article').first();
   await first.hover(); await first.getByRole('button', { name: 'Reply in thread', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Close thread' })).toBeVisible();
   await expect(home(page)).toHaveCount(0);
@@ -171,7 +178,7 @@ test('space preview opens a thread and returns without duplicating or losing the
 test('populated preview scrolls and preserves older-reading position during draft edits', async ({ page }) => {
   await fixture(page, 1440, 'light', true);
   await row(page, 'Maya Chen').click();
-  const pane = page.getByRole('region', { name: 'Conversation preview' });
+  const pane = page.getByRole('region', { name: 'Conversation preview', exact: true });
   await expect(pane.locator('article')).toHaveCount(120);
   const scroller = pane.locator('.messages-scroll');
   await expect.poll(() => scroller.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(2);

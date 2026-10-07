@@ -37,7 +37,6 @@ import {
   Pencil,
   Pin,
   PictureInPicture2,
-  PanelRight,
   Maximize2,
   History,
   Plus,
@@ -53,8 +52,8 @@ import {
   AtSign,
   Folder,
   Palette,
+  PanelRight,
   Smartphone,
-  CheckCheck,
 } from "lucide-react";
 import { useChat } from "@/lib/use-chat";
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from "@/lib/media-limits";
@@ -62,7 +61,10 @@ import { restoreDraftMap, type DraftMap } from "@/lib/draft-storage";
 import { draftSavingKey, readDraftSaving, savedDraftsKey, writeDraftSaving } from "@/lib/draft-preference";
 import VoiceRecorder from "./VoiceRecorder";
 import AudioPreview from "./AudioPreview";
+import avatarAvailability from "./AvatarAvailability.module.css";
 import splitStyles from "./ChatAppSplit.module.css";
+import sidebarMotion from "./SidebarMotion.module.css";
+import HomeControls, { type HomeKind } from "./HomeControls";
 import InstallHelp from "./InstallHelp";
 import ProfileForm, { type ProfileValues } from "./ProfileForm";
 import ContextPopover from "./ContextPopover";
@@ -144,15 +146,30 @@ function dateLabel(date: string) {
     ? "Today"
     : d.toLocaleDateString([], { month: "long", day: "numeric" });
 }
+function AvatarPhoto({ person }: { person: Person }) {
+  const [failed, setFailed] = useState(false);
+  return failed
+    ? initials(person.name)
+    : <img src={person.avatar} alt="" referrerPolicy="no-referrer" onError={() => setFailed(true)} />;
+}
 function Avatar({
   person,
   size = "",
-  online = false,
+  showAvailability = false,
 }: {
   person: Person;
   size?: string;
-  online?: boolean;
+  showAvailability?: boolean;
 }) {
+  // A saved manual status describes availability, not a live connection.
+  const savedStatus = person.status?.trim().toLowerCase();
+  const availability = savedStatus === "available" || savedStatus === "active"
+    ? { kind: "active", label: savedStatus === "available" ? "Available" : "Active" }
+    : savedStatus === "away"
+      ? { kind: "away", label: "Away" }
+      : savedStatus === "do not disturb"
+        ? { kind: "dnd", label: "Do not disturb" }
+        : null;
   const hex = (person.color || "#c2e7ff").replace("#", "");
   const dark =
     hex.length === 6 &&
@@ -169,11 +186,19 @@ function Avatar({
       }}
     >
       {person.avatar ? (
-        <img src={person.avatar} alt="" referrerPolicy="no-referrer" />
+        <AvatarPhoto key={`${person.id}:${person.avatar}`} person={person} />
       ) : (
         initials(person.name)
       )}
-      {online && <span className="online-dot" />}
+      {showAvailability && availability && (
+        <span
+          className={`${avatarAvailability.indicator} ${avatarAvailability[availability.kind]}`}
+          role="img"
+          aria-label={`Saved availability: ${availability.label}`}
+          title={`Saved availability: ${availability.label}`}
+          data-saved-availability={availability.kind}
+        />
+      )}
     </span>
   );
 }
@@ -196,7 +221,7 @@ function ConversationAvatar({
         }
       }
       size={small ? "small" : ""}
-      online
+      showAvailability
     />
   ) : (
     <span
@@ -359,11 +384,16 @@ export default function ChatApp() {
   const [splitDesktop, setSplitDesktop] = useState(false);
   const homeRowTrigger = useRef<HTMLButtonElement | null>(null);
   const splitToggleRef = useRef<HTMLButtonElement>(null);
+  const homeResizeFocus = useRef<{
+    owner: string; generation: number; conversationId: string;
+    source: HTMLElement; home: HTMLElement;
+  } | null>(null);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [pinnedOnly, setPinnedOnly] = useState(false);
   const [threadsOnly, setThreadsOnly] = useState(false);
+  const [homeKind, setHomeKind] = useState<HomeKind>("all");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [shortcutsExpanded, setShortcutsExpanded] = useState(true);
   const [directExpanded, setDirectExpanded] = useState(true);
@@ -386,6 +416,7 @@ export default function ChatApp() {
   const [miniDraft, setMiniDraft] = useState<MiniDraft>({ text: "", attachments: [] });
   const miniIdRef = useRef<string | null>(null);
   const miniOwner = useRef<string | null>(null);
+  const miniReturnFocus = useRef<{ owner: string; generation: number; trigger: HTMLElement | null } | null>(null);
   const miniGeneration = useRef(0);
   const miniDraftMap = useRef<Record<string, MiniDraft>>({});
   const miniPending = useRef(new Set<string>());
@@ -395,6 +426,8 @@ export default function ChatApp() {
   mainDraftNow.current = { selectedId, text: draft, attachments };
   const threadDraftNow = useRef({ selectedId, threadId, text: threadDraft });
   threadDraftNow.current = { selectedId, threadId, text: threadDraft };
+  const homeLayoutNow = useRef({ view, homePreview, splitEnabled, splitDesktop, threadId });
+  homeLayoutNow.current = { view, homePreview, splitEnabled, splitDesktop, threadId };
   const [sending, setSending] = useState(false);
   const [sendFeedback, setSendFeedback] = useState<Record<string, {
     stage: "sending" | "unconfirmed";
@@ -450,10 +483,37 @@ export default function ChatApp() {
   useEffect(() => {
     // A split view needs two usable panes; compact/touch layouts stay full-screen.
     const media = window.matchMedia("(min-width: 1200px) and (min-height: 501px) and (pointer: fine)");
-    const update = () => setSplitDesktop(media.matches);
+    const update = () => {
+      homeResizeFocus.current = null;
+      const layout = homeLayoutNow.current;
+      const source = document.activeElement;
+      const home = source instanceof HTMLElement ? source.closest<HTMLElement>(".home-view") : null;
+      const owner = currentUserNow.current;
+      const conversationId = mainDraftNow.current.selectedId;
+      // A populated preview removes Home entirely when it becomes full-screen.
+      // Capture actual owned focus before that branch and its menu disappear.
+      if (!media.matches && layout.splitDesktop && layout.homePreview && layout.splitEnabled &&
+          layout.view === "home" && !layout.threadId && owner && owner === draftOwner.current &&
+          conversationId && source instanceof HTMLElement && source !== document.body && home) {
+        homeResizeFocus.current = { owner, generation: miniGeneration.current, conversationId, source, home };
+      }
+      setSplitDesktop(media.matches);
+    };
+    const cancelForPointer = () => { homeResizeFocus.current = null; };
+    const cancelForOutsideFocus = (event: globalThis.FocusEvent) => {
+      const pending = homeResizeFocus.current;
+      if (pending && event.target instanceof Node && !pending.home.contains(event.target))
+        homeResizeFocus.current = null;
+    };
     update();
     media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
+    document.addEventListener("pointerdown", cancelForPointer, true);
+    document.addEventListener("focusin", cancelForOutsideFocus, true);
+    return () => {
+      media.removeEventListener("change", update);
+      document.removeEventListener("pointerdown", cancelForPointer, true);
+      document.removeEventListener("focusin", cancelForOutsideFocus, true);
+    };
   }, []);
   async function installApp() {
     if (!installPrompt) return;
@@ -502,6 +562,7 @@ export default function ChatApp() {
     ) || [];
   const thread = state?.messages.find((m) => m.id === threadId);
   const previewActive = !!selected && homePreview && splitEnabled && splitDesktop && !thread;
+  const emptyPreview = !selected && view === "home" && splitEnabled && splitDesktop;
   const replies = state?.messages.filter((m) => m.parentId === threadId) || [];
   const sectionNames = [
     ...new Set(
@@ -570,6 +631,10 @@ export default function ChatApp() {
     }
     previousUser.current = userId;
     setHomePreview(false);
+    setUnreadOnly(false);
+    setPinnedOnly(false);
+    setThreadsOnly(false);
+    setHomeKind("all");
     let split = true;
     if (userId) {
       try { split = localStorage.getItem(`relay-home-split:${userId}`) !== "off"; } catch {}
@@ -594,6 +659,7 @@ export default function ChatApp() {
     setMiniPendingIds([]);
     expandedMiniDraft.current = {};
     miniOwner.current = null;
+    miniReturnFocus.current = null;
     miniIdRef.current = null;
     setMiniId(null);
     setMiniMinimized(false);
@@ -794,6 +860,21 @@ export default function ChatApp() {
     return () => { cancelled = true; };
   }, [state, renderedDraftOwner, chat.inspectSend, chat.acknowledgeSend, chat.reconcileSendDrafts]);
   useEffect(() => {
+    const pending = homeResizeFocus.current;
+    if (!pending || splitDesktop) return;
+    homeResizeFocus.current = null;
+    // This runs after the removal commits; a surviving or deliberately changed
+    // focus, account, dialog or conversation must never be replaced.
+    if (currentUserNow.current !== pending.owner || draftOwner.current !== pending.owner ||
+        miniGeneration.current !== pending.generation || selected?.id !== pending.conversationId ||
+        mainDraftNow.current.selectedId !== pending.conversationId || view !== "home" || threadId ||
+        modalContext.current.modal || pending.source.isConnected || document.activeElement !== document.body)
+      return;
+    const input = composerRef.current;
+    if (input?.isConnected && input.getClientRects().length)
+      input.focus({ preventScroll: true });
+  }, [splitDesktop, selected?.id, view, threadId]);
+  useEffect(() => {
     if (threadId) setThreadDraft(threadDraftMap.current[threadId] || "");
     else setThreadDraft("");
   }, [threadId]);
@@ -862,9 +943,14 @@ export default function ChatApp() {
   useEffect(() => {
     if (!jumpTarget || !selectedId) return;
     const timer = window.setTimeout(() => {
+      const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+      // Target navigation takes precedence over bottom retention while media
+      // settles; otherwise a ResizeObserver can cancel the smooth jump.
+      atBottom.current = false;
+      threadAtBottom.current = false;
       document
         .getElementById(`message-${jumpTarget}`)
-        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+        ?.scrollIntoView({ block: "center", behavior });
     }, 60);
     const clear = window.setTimeout(() => setJumpTarget(null), 2500);
     return () => {
@@ -898,12 +984,16 @@ export default function ChatApp() {
     return () => window.removeEventListener("keydown", shortcut);
   }, []);
   async function act(action: ChatAction, success?: string) {
+    const owner = currentUserNow.current;
+    const generation = miniGeneration.current;
+    const current = () => !!owner && currentUserNow.current === owner &&
+      draftOwner.current === owner && miniGeneration.current === generation;
     try {
       const result = await chat.action(action);
-      if (success) setToast(success);
+      if (success && current()) setToast(success);
       return result;
     } catch (error) {
-      setToast(
+      if (current()) setToast(
         error instanceof Error
           ? error.message
           : "Something went wrong. Please try again.",
@@ -949,29 +1039,44 @@ export default function ChatApp() {
       composerRef.current?.focus({ preventScroll: true });
     });
   }
-  function closePreview() {
+  function closePreview(returnToOptions = false, preferredFocus?: HTMLElement | null) {
     setSelectedId(null);
     setThreadId(null);
     setHomePreview(false);
     requestAnimationFrame(() => {
-      const trigger = homeRowTrigger.current;
+      const trigger = preferredFocus?.isConnected
+        ? preferredFocus
+        : returnToOptions ? splitToggleRef.current : homeRowTrigger.current;
       if (trigger?.isConnected) trigger.focus();
       else splitToggleRef.current?.focus();
     });
   }
-  function toggleSplit() {
+  function toggleSplit(focusTarget: HTMLElement | null = splitToggleRef.current) {
     const enabled = !splitEnabled;
     setSplitEnabled(enabled);
     if (state) {
       try { localStorage.setItem(`relay-home-split:${state.user.id}`, enabled ? "on" : "off"); } catch {}
     }
     // Turning off a preview leaves Home open; its draft remains in the draft map.
-    if (!enabled && homePreview) closePreview();
+    if (!enabled && homePreview) closePreview(true, focusTarget);
+    else if (!enabled && emptyPreview) requestAnimationFrame(() => {
+      const trigger = focusTarget?.isConnected ? focusTarget : splitToggleRef.current;
+      trigger?.focus({ preventScroll: true });
+    });
   }
-  function closeMini() {
+  function closeMini(restoreFocus = false) {
+    const ticket = miniReturnFocus.current;
+    miniReturnFocus.current = null;
     miniIdRef.current = null;
     setMiniId(null);
     setMiniMinimized(false);
+    if (!restoreFocus || !ticket) return;
+    requestAnimationFrame(() => {
+      if (miniIdRef.current || currentUserNow.current !== ticket.owner || draftOwner.current !== ticket.owner || miniGeneration.current !== ticket.generation) return;
+      const target = [ticket.trigger, composerRef.current, splitToggleRef.current, searchRef.current]
+        .find(node => node?.isConnected && node.getClientRects().length && !node.matches(":disabled"));
+      target?.focus({ preventScroll: true });
+    });
   }
   function openMini(conversation: Conversation) {
     setModal(null);
@@ -981,6 +1086,13 @@ export default function ChatApp() {
       return;
     }
     if (miniId && miniId !== conversation.id) setToast("One pop-up at a time. Drafts stay with each conversation.");
+    const active = document.activeElement;
+    miniReturnFocus.current = {
+      owner: state.user.id,
+      generation: miniGeneration.current,
+      trigger: active instanceof HTMLElement && active !== document.body && !active.closest('[role="dialog"]')
+        ? active : menuAnchor.current,
+    };
     miniOwner.current = state.user.id;
     miniIdRef.current = conversation.id;
     setMiniId(conversation.id);
@@ -1038,6 +1150,7 @@ export default function ChatApp() {
   }
   function expandMini() {
     if (!state || !miniConversation || miniOwner.current !== state.user.id) { closeMini(); return; }
+    const owner = state.user.id, generation = miniGeneration.current, conversationId = miniConversation.id;
     if (selectedId) {
       const stored = draftMap.current[selectedId];
       if (stored?.text !== draft || stored.attachments !== attachments)
@@ -1055,6 +1168,10 @@ export default function ChatApp() {
     }
     openConversation(miniConversation);
     closeMini();
+    requestAnimationFrame(() => {
+      if (currentUserNow.current === owner && draftOwner.current === owner && miniGeneration.current === generation && mainDraftNow.current.selectedId === conversationId)
+        composerRef.current?.focus({ preventScroll: true });
+    });
   }
   useEffect(() => {
     if (miniId && !miniConversation) closeMini();
@@ -1071,6 +1188,7 @@ export default function ChatApp() {
     setUnreadOnly(false);
     setPinnedOnly(false);
     setThreadsOnly(false);
+    setHomeKind("all");
   }
   async function send(inThread = false) {
     const text = inThread ? threadDraft : draft;
@@ -1653,11 +1771,17 @@ export default function ChatApp() {
       </main>
     );
 
+  const matchesHomeFilters = (conversation: Conversation) =>
+    (!unreadOnly || conversation.unread > 0) &&
+    (!pinnedOnly || conversation.pinned) &&
+    (homeKind === "all" ||
+      (homeKind === "space" ? conversation.kind === "space" : conversation.kind !== "space"));
   const visibleConversations = state.conversations
     .filter(
       (c) =>
-        (!unreadOnly || c.unread > 0) &&
-        (!pinnedOnly || c.pinned) &&
+        (view === "home"
+          ? matchesHomeFilters(c)
+          : (!unreadOnly || c.unread > 0) && (!pinnedOnly || c.pinned)) &&
         (!searchScope || c.id === searchScope) &&
         (view !== "direct" || c.kind !== "space") &&
         (view !== "spaces" || c.kind === "space") &&
@@ -1702,6 +1826,9 @@ export default function ChatApp() {
               )) &&
             (view === "home" && threadsOnly
               ? !m.parentId &&
+                state.conversations.some(
+                  (conversation) => conversation.id === m.conversationId && matchesHomeFilters(conversation),
+                ) &&
                 state.messages.some(
                   (reply) => reply.parentId === m.id && !reply.deleted,
                 )
@@ -1871,13 +1998,48 @@ export default function ChatApp() {
 
   const homeView = (
           <div className="home-view">
+            {view === "home" ? (
+              <HomeControls
+                key={state.user.id}
+                unread={unreadOnly}
+                threads={threadsOnly}
+                kind={homeKind}
+                pinned={pinnedOnly}
+                splitAvailable={splitDesktop}
+                splitEnabled={splitEnabled}
+                optionsRef={splitToggleRef}
+                onUnreadChange={setUnreadOnly}
+                onThreadsChange={setThreadsOnly}
+                onKindChange={setHomeKind}
+                onPinnedChange={setPinnedOnly}
+                onReset={() => {
+                  setUnreadOnly(false);
+                  setThreadsOnly(false);
+                  setPinnedOnly(false);
+                  setHomeKind("all");
+                }}
+                onSplitToggle={toggleSplit}
+                onReadAll={() => {
+                  const owner = currentUserNow.current;
+                  const generation = miniGeneration.current;
+                  void Promise.all(
+                    state.conversations
+                      .filter((conversation) => conversation.unread)
+                      .map((conversation) => act({ type: "read", conversationId: conversation.id })),
+                  )
+                    .then(() => {
+                      if (owner && currentUserNow.current === owner && draftOwner.current === owner && miniGeneration.current === generation)
+                        setToast("All conversations marked as read");
+                    })
+                    .catch(() => {});
+                }}
+              />
+            ) : (
             <header className="home-header">
               <div>
                 <h1>{names[view]}</h1>
                 <p>
-                  {view === "home"
-                    ? "Your conversations, all in one place."
-                    : view === "direct"
+                  {view === "direct"
                       ? "A little closer to your people."
                       : view === "spaces"
                         ? "Big ideas start with a shared space."
@@ -1894,7 +2056,6 @@ export default function ChatApp() {
                                   : "Find messages and conversations."}
                 </p>
               </div>
-              <div className={splitStyles.homeControls}>
               <button
                 className={`filter-button ${unreadOnly ? "active" : ""}`}
                 aria-pressed={unreadOnly}
@@ -1903,16 +2064,8 @@ export default function ChatApp() {
                 <span className="filter-dot" />
                 Unread{unreadOnly && <Check size={14} />}
               </button>
-              {view === "home" && splitDesktop && <button
-                ref={splitToggleRef}
-                className={`filter-button ${splitEnabled ? "active" : ""}`}
-                aria-label="Split pane mode"
-                aria-pressed={splitEnabled}
-                title={splitEnabled ? "Turn off split pane mode" : "Turn on split pane mode"}
-                onClick={toggleSplit}
-              ><PanelRight size={17} /></button>}
-              </div>
             </header>
+            )}
             <div className="mobile-search">
               <Search size={21} />
               <input
@@ -1931,49 +2084,6 @@ export default function ChatApp() {
                 }}
               />
             </div>
-            {view === "home" && (
-              <div className="home-filter-tabs">
-                <button className="selected" onClick={() => navigate("home")}>
-                  All
-                </button>
-                <button onClick={() => navigate("direct")}>
-                  Direct messages
-                </button>
-                <button onClick={() => navigate("spaces")}>Spaces</button>
-                <button
-                  className={pinnedOnly ? "selected" : ""}
-                  onClick={() => setPinnedOnly(!pinnedOnly)}
-                >
-                  <Pin size={12} />
-                  Pinned
-                </button>
-                <button
-                  role="checkbox"
-                  aria-checked={threadsOnly}
-                  className={threadsOnly ? "selected" : ""}
-                  onClick={() => setThreadsOnly((value) => !value)}
-                >
-                  <MessageSquare size={14} />
-                  Threads
-                </button>
-                <IconButton
-                  label="Mark all conversations read"
-                  onClick={() => {
-                    void Promise.all(
-                      state.conversations
-                        .filter((c) => c.unread)
-                        .map((c) =>
-                          act({ type: "read", conversationId: c.id }),
-                        ),
-                    )
-                      .then(() => setToast("All conversations marked as read"))
-                      .catch(() => {});
-                  }}
-                >
-                  <CheckCheck size={20} />
-                </IconButton>
-              </div>
-            )}
             {view === "search" && (
               <SearchFilters
                 values={activeSearchFilters}
@@ -2042,7 +2152,7 @@ export default function ChatApp() {
                           if (c) openConversation(c);
                           setJumpTarget(m.parentId || m.id);
                           if (m.parentId) setThreadId(m.parentId);
-                          else if (threadsOnly) setThreadId(m.id);
+                            else if (view === "home" && threadsOnly) setThreadId(m.id);
                         }}
                       >
                         <Avatar person={m.author} />
@@ -2087,7 +2197,7 @@ export default function ChatApp() {
                             : view === "starred"
                               ? "Save a thought for later"
                               : threadsOnly
-                                ? "No threads yet"
+                                ? unreadOnly || pinnedOnly || homeKind !== "all" ? "No matching threads" : "No threads yet"
                                 : "You’re all caught up"}
                         </h2>
                         <p>
@@ -2096,7 +2206,7 @@ export default function ChatApp() {
                             : view === "starred"
                               ? "Star a message in any conversation and find it here."
                               : threadsOnly
-                                ? "Reply in a thread to keep a focused discussion together. Threads from your conversations will appear here."
+                                ? unreadOnly || pinnedOnly || homeKind !== "all" ? "Change or clear your Home filters to see more threads." : "Reply in a thread to keep a focused discussion together. Threads from your conversations will appear here."
                                 : "Messages that mention your name or @all will appear here."}
                         </p>
                       </div>
@@ -2198,20 +2308,24 @@ export default function ChatApp() {
                     <div className="empty-state">
                       <MessageSquare size={40} />
                       <h2>
-                        {unreadOnly
+                        {view === "home" && (pinnedOnly || homeKind !== "all")
+                          ? "No matching conversations"
+                          : unreadOnly
                           ? "You’re all caught up"
                           : query
                             ? "No conversations found"
                             : "Make the first connection"}
                       </h2>
                       <p>
-                        {unreadOnly
+                        {view === "home" && (pinnedOnly || homeKind !== "all")
+                          ? "Change or clear your Home filters to see more conversations."
+                          : unreadOnly
                           ? "No unread conversations. A nice moment to take a breath."
                           : query
                             ? "Try a different name or keyword."
                             : "Start a conversation or create a space for your team."}
                       </p>
-                      {!query && !unreadOnly && (
+                      {!query && !unreadOnly && !pinnedOnly && homeKind === "all" && (
                         <button
                           className="primary-button"
                           onClick={() =>
@@ -2357,7 +2471,7 @@ export default function ChatApp() {
       </header>
       <aside
         id="chat-navigation"
-        className="sidebar"
+        className={`sidebar ${sidebarMotion.sidebar}`}
         aria-label="Chat navigation"
       >
         <button
@@ -2382,6 +2496,7 @@ export default function ChatApp() {
             <button
               key={item.view}
               aria-label={item.label}
+              aria-current={(!selected || previewActive) && view === item.view ? "page" : undefined}
               className={`nav-item ${(!selected || previewActive) && view === item.view ? "selected" : ""}`}
               onClick={() => navigate(item.view)}
             >
@@ -2520,8 +2635,18 @@ export default function ChatApp() {
           </span>
         </div>
       </aside>
-      <main id="main-content" className={`main-panel ${previewActive ? splitStyles.split : ""}`}>
+      <main id="main-content" className={`main-panel ${previewActive || emptyPreview ? splitStyles.split : ""}`}>
         {(!selected || previewActive) && homeView}
+        {emptyPreview && (
+          <section className={splitStyles.emptyPreview} aria-label="Conversation preview placeholder">
+            <IconButton label="Close empty conversation preview" onClick={() => toggleSplit()}><X size={18} /></IconButton>
+            <div>
+              <PanelRight size={48} aria-hidden="true" />
+              <h2>No conversation selected</h2>
+              <p>Use the toggle to switch between single and split pane modes</p>
+            </div>
+          </section>
+        )}
         {selected && <section key="conversation" aria-label={previewActive ? "Conversation preview" : "Conversation"} className={`conversation-pane ${splitStyles.pane} ${previewActive ? splitStyles.preview : ""}`}>
             {previewActive ? (
             <header className={splitStyles.previewHeader}>
@@ -2530,7 +2655,7 @@ export default function ChatApp() {
                 {selected.name}
               </button>
               <IconButton label="Expand conversation" onClick={expandPreview}><Maximize2 size={18} /></IconButton>
-              <IconButton label="Close conversation preview" onClick={closePreview}><X size={18} /></IconButton>
+              <IconButton label="Close conversation preview" onClick={() => closePreview()}><X size={18} /></IconButton>
             </header>
             ) : (
             <header className="conversation-header">
@@ -2765,7 +2890,7 @@ export default function ChatApp() {
         onMinimize={() => setMiniMinimized(true)}
         onRestore={() => { setMiniMinimized(false); if (miniConversation.unread) run({ type: "read", conversationId: miniConversation.id }); }}
         onExpand={expandMini}
-        onClose={closeMini}
+        onClose={() => closeMini(true)}
       />}
       {toastUI}
 

@@ -9,6 +9,9 @@ const filter = (page: Page, title: string) =>
 const menu = (page: Page, title: string) =>
   page.getByRole("dialog", { name: title, exact: true });
 const marker = "Searchfixture";
+const identityMarker = "Identityfixture";
+const duplicatePersonName = "Taylor Lee";
+const duplicateConversationName = "Shared project";
 
 async function choose(page: Page, title: string, option: string) {
   await filter(page, title).click();
@@ -157,6 +160,24 @@ test.beforeEach(async ({ page }) => {
       author: self,
     }),
   );
+  // Equal display labels are legal; filters must retain the underlying IDs.
+  const firstPerson = { id: "same-name-first", name: duplicatePersonName, email: "first.taylor@example.test" };
+  const secondPerson = { id: "same-name-second", name: duplicatePersonName, email: "second.taylor@example.test" };
+  for (const kind of ["space", "group"] as const) {
+    const conversationId = `same-name-${kind}`;
+    state.conversations.push({
+      id: conversationId, name: duplicateConversationName, kind,
+      members: [self, firstPerson, secondPerson],
+      updatedAt: "2026-10-05T11:00:00.000Z", unread: 0,
+    });
+    for (const [identity, person] of [["first", firstPerson], ["second", secondPerson]] as const) {
+      state.messages.push({
+        id: `identity-${identity}-${kind}`, conversationId, author: person,
+        text: `${identityMarker} ${identity} ${kind}`,
+        createdAt: "2026-10-05T11:00:00.000Z", reactions: [], attachments: [],
+      });
+    }
+  }
   await page.addInitScript(
     ({ state, key }) => {
       localStorage.setItem(key, JSON.stringify(state));
@@ -165,6 +186,78 @@ test.beforeEach(async ({ page }) => {
   );
   await page.goto("/");
   await page.getByRole("button", { name: "Explore demo", exact: true }).click();
+});
+
+test("same-name people remain distinct through search, selection and menu reopen", async ({ page }) => {
+  const keyWarnings: string[] = [];
+  page.on("console", message => {
+    if (/same key|unique.*key|duplicate.*key/i.test(message.text())) keyWarnings.push(message.text());
+  });
+  await query(page, identityMarker);
+  await expect(results(page)).toHaveCount(4);
+  for (const identity of ["first", "second"] as const) {
+    await filter(page, "From").click();
+    const people = menu(page, "From");
+    const find = people.getByRole("textbox", { name: "Find a person", exact: true });
+    await find.fill(`${identity}.taylor@example.test`);
+    await expect(people.getByRole("button").filter({ hasText: duplicatePersonName })).toHaveCount(1);
+    await find.fill(duplicatePersonName);
+    await expect(people.getByRole("button").filter({ hasText: duplicatePersonName })).toHaveCount(2);
+    const option = people.getByRole("button").filter({
+      has: page.locator("small", { hasText: `${identity}.taylor@example.test` }),
+    });
+    await expect(option).toHaveCount(1);
+    await option.click();
+    await expect(people).toHaveCount(0);
+    await expect(results(page)).toHaveCount(2);
+    await expect.poll(async () => (await results(page).locator("strong").allTextContents()).sort()).toEqual([
+      `${identityMarker} ${identity} group`, `${identityMarker} ${identity} space`,
+    ]);
+    await filter(page, "From").click();
+    await expect(people.getByRole("button").filter({
+      has: page.locator("small", { hasText: `${identity}.taylor@example.test` }),
+    })).toHaveAttribute("aria-pressed", "true");
+    const other = identity === "first" ? "second" : "first";
+    await expect(people.getByRole("button").filter({
+      has: page.locator("small", { hasText: `${other}.taylor@example.test` }),
+    })).toHaveAttribute("aria-pressed", "false");
+    await page.keyboard.press("Escape");
+  }
+  expect(keyWarnings).toEqual([]);
+});
+
+test("same-name conversations select their own message IDs and retain the checked option", async ({ page }) => {
+  const keyWarnings: string[] = [];
+  page.on("console", message => {
+    if (/same key|unique.*key|duplicate.*key/i.test(message.text())) keyWarnings.push(message.text());
+  });
+  await query(page, identityMarker);
+  await expect(results(page)).toHaveCount(4);
+  for (const [kind, label] of [["space", "Space"], ["group", "Group"]] as const) {
+    await filter(page, "Said in").click();
+    const places = menu(page, "Said in");
+    await places.getByRole("textbox", { name: "Find a conversation", exact: true }).fill(duplicateConversationName);
+    await expect(places.getByRole("button").filter({ hasText: duplicateConversationName })).toHaveCount(2);
+    const option = places.getByRole("button").filter({
+      hasText: duplicateConversationName,
+      has: page.locator("small", { hasText: new RegExp(`^${label}$`) }),
+    });
+    await expect(option).toHaveCount(1);
+    await option.click();
+    await expect(places).toHaveCount(0);
+    await expect(results(page)).toHaveCount(2);
+    await expect.poll(async () => (await results(page).locator("strong").allTextContents()).sort()).toEqual([
+      `${identityMarker} first ${kind}`, `${identityMarker} second ${kind}`,
+    ]);
+    await filter(page, "Said in").click();
+    await expect(option).toHaveAttribute("aria-pressed", "true");
+    await expect(places.getByRole("button").filter({
+      hasText: duplicateConversationName,
+      has: page.locator("small", { hasText: new RegExp(`^${kind === "space" ? "Group" : "Space"}$`) }),
+    })).toHaveAttribute("aria-pressed", "false");
+    await page.keyboard.press("Escape");
+  }
+  expect(keyWarnings).toEqual([]);
 });
 
 test("combined person/conversation/image/link/mention/date filters return only matching accessible messages and reset", async ({
@@ -358,3 +451,26 @@ test.describe("phone search", () => {
     });
   });
 });
+
+for (const preference of ['reduce', 'no-preference'] as const) {
+  test(`message-result jump uses ${preference === 'reduce' ? 'immediate' : 'smooth'} scrolling for the motion preference`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: preference });
+    await page.evaluate(() => {
+      const record = window as unknown as { messageScrollCalls: { id: string; behavior?: ScrollBehavior }[] };
+      record.messageScrollCalls = [];
+      const original = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function(options?: boolean | ScrollIntoViewOptions) {
+        record.messageScrollCalls.push({ id: this.id, behavior: typeof options === 'object' ? options.behavior : undefined });
+        return original.call(this, options);
+      };
+    });
+    await query(page, marker);
+    const target = results(page).filter({ hasText: 'project review @Alex WWW.example.com/report' });
+    await expect(target).toHaveCount(1); await target.click();
+    const message = page.locator('#message-search-match');
+    await expect(message).toHaveCount(1);
+    await expect.poll(() => page.evaluate(() => (window as unknown as { messageScrollCalls: { id: string; behavior?: ScrollBehavior }[] }).messageScrollCalls.filter(call => call.id === 'message-search-match').map(call => call.behavior)))
+      .toEqual([preference === 'reduce' ? 'auto' : 'smooth']);
+    await expect(message).toBeInViewport();
+  });
+}

@@ -47,7 +47,9 @@ async function openFixture(page: Page, theme: 'light' | 'dark', toolbarStress = 
   await page.route('**/api/config', route => route.fulfill({ json: { supabaseUrl: '', supabaseAnonKey: '', databaseConfigured: false } }));
   await page.goto('/');
   await page.getByRole('button', { name: 'Explore demo', exact: true }).click();
-  if (page.viewportSize()!.width < 800) await page.getByRole('main').getByRole('button', { name: /^(?:W )?Maya Chen / }).first().click();
+  if (page.viewportSize()!.width < 800) await page.locator('.home-view .conversation-row').filter({
+    has: page.locator('.conversation-row-content > strong', { hasText: /^Maya Chen$/ }),
+  }).click();
   else await page.getByRole('complementary', { name: 'Chat navigation' }).getByRole('button', { name: 'Maya Chen', exact: true }).click();
   await expect(page.getByRole('main').getByRole('textbox', { name: 'Message', exact: true })).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('data-theme', theme);

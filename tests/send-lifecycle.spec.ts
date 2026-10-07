@@ -118,7 +118,7 @@ async function opened(context: BrowserContext) {
   const page = await context.newPage();
   await page.routeWebSocket(`${provider.replace('https:', 'wss:')}/**`, socket => socket.close());
   await page.goto(base);
-  await page.getByRole('main').getByRole('button').filter({ hasText: 'Lifecycle Peer' }).first().click();
+  await page.locator('.home-view .conversation-row').filter({ hasText: 'Lifecycle Peer' }).click();
   await expect(input(page)).toBeVisible();
   return page;
 }
@@ -320,13 +320,13 @@ test.describe('desktop Home preview send ownership', () => {
     await page.goto(base);
     await expect(page.getByRole('heading', { name: 'Home', exact: true })).toBeVisible();
     await page.getByRole('navigation').getByRole('button', { name: 'Home', exact: true }).click();
-    await page.getByRole('main').locator('.conversation-row').filter({ hasText: 'Lifecycle Peer' }).click();
+    await page.locator('.home-view .conversation-row').filter({ hasText: 'Lifecycle Peer' }).click();
     await expect(page.getByRole('button', { name: 'Close conversation preview' })).toBeVisible();
     f.setHold('after-commit-ack');
     await input(page).fill('Saved from the preview'); await sendButton(page).click();
     await expect.poll(() => f.sends.length).toBe(1);
     await page.getByRole('button', { name: 'Close conversation preview' }).click();
-    await page.getByRole('main').locator('.conversation-row').filter({ hasText: 'Lifecycle Peer' }).click();
+    await page.locator('.home-view .conversation-row').filter({ hasText: 'Lifecycle Peer' }).click();
     await input(page).fill('A newer unsent preview draft');
     f.release();
     await expect(sendButton(page)).not.toHaveAttribute('aria-busy', 'true');

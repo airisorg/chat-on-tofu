@@ -10,3 +10,8 @@ export function MaterialHelp({size = 24}: {size?: number}) {
 export function MaterialNewChat({size = 24}: {size?: number}) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 20V5q0-.825.587-1.413Q4.175 3 5 3h12q.825 0 1.413.587Q19 4.175 19 5v5.075q-.25-.05-.5-.063Q18.25 10 18 10t-.5.012q-.25.013-.5.063V5H5v10h7.075q-.05.25-.063.5-.012.25-.012.5t.012.5q.013.25.063.5H6ZM7 9h8V7H7Zm0 4h5v-2H7Zm10 7v-3h-3v-2h3v-3h2v3h3v2h-3v3ZM5 15V5v10Z"/></svg>;
 }
+// Official 20px vertical_split; matches the Home list/preview arrangement.
+// https://github.com/google/material-design-icons/blob/master/symbols/web/vertical_split/materialsymbolsoutlined/vertical_split_20px.svg
+export function MaterialVerticalSplit({size = 20}: {size?: number}) {
+  return <svg width={size} height={size} viewBox="0 -960 960 960" fill="currentColor" aria-hidden="true"><path d="M144-376v-72h288v72H144Zm0 136v-72h288v72H144Zm0-272v-72h288v72H144Zm0-136v-72h288v72H144Zm455.74 408Q570-240 549-261.15 528-282.3 528-312v-336q0-29.7 21.18-50.85Q570.35-720 600.09-720h144.17Q774-720 795-698.85q21 21.15 21 50.85v336q0 29.7-21.18 50.85Q773.65-240 743.91-240H599.74Zm.26-72h144v-336H600v336Zm72-168Z"/></svg>;
+}

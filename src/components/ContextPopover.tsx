@@ -17,6 +17,7 @@ export default function ContextPopover({
   onClose,
   variant = "menu",
   hideHeader = false,
+  className = "",
 }: {
   title: string;
   children: ReactNode;
@@ -24,6 +25,7 @@ export default function ContextPopover({
   onClose: () => void;
   variant?: "menu" | "form" | "emoji" | "message";
   hideHeader?: boolean;
+  className?: string;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const close = useRef(onClose);
@@ -177,7 +179,7 @@ export default function ContextPopover({
     <div
       ref={panel}
       data-context-popover
-      className={`${styles.panel} ${variant === "menu" ? "" : styles[variant]}`}
+      className={`${styles.panel} ${variant === "menu" ? "" : styles[variant]} ${className}`}
       role="dialog"
       aria-modal="false"
       aria-label={title}

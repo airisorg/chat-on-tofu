@@ -102,8 +102,13 @@ test("find a known person by name, select with Enter, and reuse the existing dir
   await expect(
     page
       .getByRole("complementary", { name: "Chat navigation" })
-      .getByRole("button", { name: /^Maya Chen/ }),
+      .getByRole("button", { name: "Maya Chen", exact: true }),
   ).toHaveCount(1);
+  await page.getByRole("complementary", { name: "Chat navigation" })
+    .getByRole("button", { name: "Home", exact: true }).click();
+  await expect(page.locator(".home-view .conversation-row").filter({
+    has: page.locator(".conversation-row-content > strong", { hasText: /^Maya Chen$/ }),
+  })).toHaveCount(1);
 });
 
 test("group suggestions exclude selected people and removable chips preserve other recipients", async ({

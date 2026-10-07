@@ -43,8 +43,8 @@ test("phone actions retain usable touch targets", async ({
       await page.evaluate(() => matchMedia("(pointer: coarse)").matches),
     ).toBe(true);
     const all = main(page)
-      .locator(".home-filter-tabs")
-      .getByRole("button", { name: "All", exact: true });
+      .locator(".home-header")
+      .getByRole("button", { name: "More Home actions", exact: true });
     await expect(all).toBeVisible();
     const allBox = await all.boundingBox();
     expect(allBox!.width).toBeGreaterThanOrEqual(44);

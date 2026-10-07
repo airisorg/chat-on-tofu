@@ -101,8 +101,9 @@ async function verify(page: Page, theme: 'light' | 'dark', info: TestInfo) {
   }
 }
 
-for (const width of [375, 390, 1024, 3440]) test.describe(`${width}px`, () => {
-  test.use({ viewport: { width, height: width < 800 ? 844 : 960 }, hasTouch: width < 800, isMobile: width < 800 });
+for (const width of [375, 390, 768, 799, 1024, 3440]) test.describe(`${width}px`, () => {
+  // Narrow desktop windows remain fine-pointer even below the mobile layout breakpoint.
+  test.use({ viewport: { width, height: width < 800 ? 844 : 960 }, hasTouch: width < 768, isMobile: width < 768 });
   test('direct-message bubbles retain opposite sides and the shared column in both themes', async ({ page }, info) => {
     await page.emulateMedia({ colorScheme: 'light' });
     await demo(page);

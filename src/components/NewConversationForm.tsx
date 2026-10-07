@@ -71,6 +71,9 @@ export default function NewConversationForm({
     suggestions.unshift({ email: term, name: term.split("@")[0] });
   const canAdd = (kind !== "dm" || recipients.length === 0) && recipients.length < MAX_INVITEES;
   const expanded = focused && canAdd && suggestions.length > 0;
+  const activeOptionId = expanded && active >= 0
+    ? `${listId}-option-${Math.min(active, suggestions.length - 1)}`
+    : undefined;
   const add = (person: Recipient) => {
     if (!canAdd || chosen.has(person.email.toLowerCase())) return;
     setRecipients((values) => [...values, person]);
@@ -87,6 +90,12 @@ export default function NewConversationForm({
   useEffect(() => {
     input.current?.focus({ preventScroll: true });
   }, [kind]);
+  useEffect(() => {
+    // aria-activedescendant leaves focus on the input, so the browser will not
+    // automatically scroll a keyboard-highlighted option into the list viewport.
+    if (activeOptionId)
+      document.getElementById(activeOptionId)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activeOptionId, term, suggestions.length]);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy) return;
@@ -231,11 +240,7 @@ export default function NewConversationForm({
                 aria-autocomplete="list"
                 aria-expanded={expanded}
                 aria-controls={expanded ? listId : undefined}
-                aria-activedescendant={
-                  expanded && active >= 0
-                    ? `${listId}-option-${Math.min(active, suggestions.length - 1)}`
-                    : undefined
-                }
+                aria-activedescendant={activeOptionId}
                 aria-describedby={`${listId}-help`}
                 placeholder="Name or email"
                 value={query}

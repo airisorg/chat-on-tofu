@@ -39,6 +39,7 @@ export default function MiniConversation({
   const [voiceOpen, setVoiceOpen] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
+  const restoreTrigger = useRef<HTMLButtonElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const emojiPicker = useRef<HTMLDivElement>(null);
   const emojiTrigger = useRef<HTMLButtonElement>(null);
@@ -52,7 +53,11 @@ export default function MiniConversation({
     return () => { alive.current = false; };
   }, []);
   useEffect(() => {
-    if (minimized) { setVoiceOpen(false); setEmojiOpen(false); return; }
+    if (minimized) {
+      setVoiceOpen(false); setEmojiOpen(false);
+      const frame = requestAnimationFrame(() => restoreTrigger.current?.focus({ preventScroll: true }));
+      return () => cancelAnimationFrame(frame);
+    }
     atBottom.current = true;
     const frame = requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }));
     return () => cancelAnimationFrame(frame);
@@ -145,7 +150,7 @@ export default function MiniConversation({
     }}>
       <header className={styles.header}>
         {avatar}
-        {minimized ? <button type="button" className={styles.title} aria-label="Restore pop-up" onClick={onRestore}>{conversation.name}</button>
+        {minimized ? <button ref={restoreTrigger} type="button" className={styles.title} aria-label="Restore pop-up" onClick={onRestore}>{conversation.name}</button>
           : <strong className={styles.title}>{conversation.name}</strong>}
         {!minimized && <button type="button" className={styles.icon} aria-label="Minimize pop-up" title="Minimize" onClick={onMinimize}><Minus size={19} /></button>}
         <button type="button" className={styles.icon} aria-label="Expand conversation" title="Expand conversation" disabled={locked || readingFiles} onClick={onExpand}><Maximize2 size={18} /></button>

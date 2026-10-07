@@ -40,6 +40,20 @@ for (const width of [1440, 390, 320]) for (const theme of ['light', 'dark'] as c
     } else await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     await reachable(settings, page);
+    const appearance = settings.getByRole('combobox', { name: 'Appearance', exact: true });
+    const originalBox = (await appearance.boundingBox())!;
+    expect(originalBox.width).toBe(92);
+    if (width < 800) expect(originalBox.height).toBeGreaterThanOrEqual(44);
+    // Native selection remains functional while the field keeps a stable box.
+    for (const option of ['light', 'dark', 'system']) {
+      await appearance.selectOption(option);
+      await expect(appearance).toHaveValue(option);
+      const bounds = (await appearance.boundingBox())!;
+      expect(bounds.x).toBe(originalBox.x);
+      expect(bounds.width).toBe(originalBox.width);
+      expect(bounds.height).toBe(originalBox.height);
+    }
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
     await expect(settings).toHaveScreenshot(`settings-${width}-${theme}.png`);
     const drafts = settings.getByRole('switch', { name: 'Save drafts on this device' });
     await drafts.click();

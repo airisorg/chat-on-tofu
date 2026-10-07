@@ -20,9 +20,23 @@
   border-radius: 24px;
   overflow: hidden;
 }
-.homeControls { display: flex; align-items: center; gap: 8px; }
-.homeControls > button { flex-shrink: 0; }
 .selectedRow:global(.conversation-row) { background: var(--blue-soft); }
+.emptyPreview {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 64px 24px;
+  border-radius: 24px;
+  background: var(--surface);
+}
+.emptyPreview > button { position: absolute; top: 12px; right: 12px; }
+.emptyPreview > div { max-width: 340px; text-align: center; }
+.emptyPreview svg { color: var(--muted); }
+.emptyPreview h2 { margin-top: 24px; font-size: 16px; font-weight: 500; line-height: 24px; }
+.emptyPreview p { margin-top: 12px; font-size: 14px; line-height: 22px; color: var(--muted); }
 .previewHeader {
   display: flex;
   flex-shrink: 0;
