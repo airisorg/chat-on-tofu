@@ -4,6 +4,25 @@ import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 export * from '@playwright/test';
 
+// Explicit destruction boundaries (for example, an outbound OAuth click) may
+// replace the renderer before pagehide's asynchronous binding reaches Node.
+// Capture the current real realm before the test triggers that action. This
+// does not stop/replay app handlers or claim their later transient execution.
+export async function captureBeforeNavigation(page: Page) {
+  if (process.env.CHAT_COLLECT_COVERAGE !== '1') return;
+  await page.evaluate(async () => {
+    const scope = globalThis as typeof globalThis & {
+      __coverage__?: unknown;
+      __chatCoverageSnapshot: (coverage: unknown, phase?: string) => Promise<void>;
+    };
+    if (scope.__coverage__)
+      await scope.__chatCoverageSnapshot(
+        JSON.parse(JSON.stringify(scope.__coverage__)),
+        'before-destructive-interaction',
+      );
+  });
+}
+
 // Ordinary suites keep the exact original fixture. Coverage is opt-in and has
 // no network collector, runtime endpoint, app storage or provider credentials.
 export const test =
@@ -73,8 +92,11 @@ export const test =
               // Script/link navigations can destroy a realm without invoking a
               // Playwright navigation method. Send the counter snapshot across
               // the exposed binding before pagehide; drain all writes at teardown.
-              await value.exposeBinding('__chatCoverageSnapshot', (_source, coverage) => {
-                const write = store(coverage as Record<string, unknown> | null, 'pagehide');
+              await value.exposeBinding('__chatCoverageSnapshot', (_source, coverage, phase) => {
+                const write = store(
+                  coverage as Record<string, unknown> | null,
+                  typeof phase === 'string' ? phase : 'pagehide',
+                );
                 pending.add(write);
                 void write.then(
                   () => pending.delete(write),

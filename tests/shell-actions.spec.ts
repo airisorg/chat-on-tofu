@@ -75,6 +75,89 @@ test('conversation settings persist section, mute and pin changes and permit saf
   await expect(entry.locator('.lucide-pin')).toHaveCount(1);
 });
 
+test('muted DM indicators persist in custom sections through reload, unmute and move-back', async ({
+  page,
+}, info) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await demo(page);
+  const defaultEntry = nav(page).locator('#direct-conversations').getByRole('button', {
+    name: 'Maya Chen',
+    exact: true,
+  });
+  await defaultEntry.click();
+  await expect(main(page).getByRole('heading', { name: 'Maya Chen', exact: true })).toBeVisible();
+  let menu = await details(page);
+  await menu.getByRole('button', { name: 'Mute conversation', exact: true }).click();
+  await expect(defaultEntry.locator('.lucide-bell-off')).toHaveCount(1);
+  menu = await details(page);
+  await menu.getByRole('button', { name: 'Pin conversation', exact: true }).click();
+
+  async function setSection(value: string) {
+    const menu = await details(page);
+    await menu.getByRole('button', { name: 'Edit details and section', exact: true }).click();
+    const form = page.getByRole('dialog');
+    await form.getByRole('combobox', { name: /^Section/ }).fill(value);
+    await form.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(form).toHaveCount(0);
+  }
+  await setSection('Muted projects');
+  const customGroup = nav(page)
+    .locator('.sidebar-group')
+    .filter({
+      has: page.getByRole('button', { name: 'Muted projects', exact: true }),
+    });
+  const customEntry = customGroup.getByRole('button', { name: 'Maya Chen', exact: true });
+  await expect(defaultEntry).toHaveCount(0);
+  await expect(customEntry.locator('.lucide-pin')).toHaveCount(1);
+  menu = await details(page);
+  await expect(
+    menu.getByRole('button', { name: 'Unmute conversation', exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+  await info.attach('custom-DM-mute-indicator', {
+    body: await customEntry.screenshot(),
+    contentType: 'image/png',
+  });
+  await expect(customEntry.locator('.lucide-bell-off')).toHaveCount(1);
+
+  menu = await details(page);
+  await menu.getByRole('button', { name: 'Mark as unread', exact: true }).click();
+  await expect(customEntry.locator('.unread-dot')).toHaveCount(1);
+  await expect(customEntry.locator('span.unread')).toHaveText('Maya Chen');
+  await expect(customEntry.locator('.lucide-pin')).toHaveCount(1);
+  await expect(customEntry.locator('.lucide-bell-off')).toHaveCount(1);
+  await page.reload();
+  await expect(customEntry.locator('.lucide-bell-off')).toHaveCount(1);
+  await expect(customEntry.locator('.unread-dot')).toHaveCount(1);
+  await expect(customEntry.locator('.lucide-pin')).toHaveCount(1);
+  await customEntry.click();
+  await expect(customEntry.locator('.unread-dot')).toHaveCount(0);
+  await expect(customEntry.locator('span.unread')).toHaveCount(0);
+  menu = await details(page);
+  await menu.getByRole('button', { name: 'Unmute conversation', exact: true }).click();
+  await expect(customEntry.locator('.lucide-bell-off')).toHaveCount(0);
+  await expect(customEntry.locator('.lucide-pin')).toHaveCount(1);
+  menu = await details(page);
+  await menu.getByRole('button', { name: 'Mute conversation', exact: true }).click();
+  await expect(customEntry.locator('.lucide-bell-off')).toHaveCount(1);
+
+  await setSection('');
+  await expect(customGroup).toHaveCount(0);
+  await expect(defaultEntry).toBeVisible();
+  await expect(defaultEntry.locator('.lucide-bell-off')).toHaveCount(1);
+  menu = await details(page);
+  await expect(menu.getByRole('button', { name: 'Unpin conversation', exact: true })).toBeVisible();
+  await menu.getByRole('button', { name: 'Unmute conversation', exact: true }).click();
+  await expect(defaultEntry.locator('.lucide-bell-off')).toHaveCount(0);
+  await page.reload();
+  await expect(defaultEntry).toBeVisible();
+  await expect(defaultEntry.locator('.lucide-bell-off')).toHaveCount(0);
+  await defaultEntry.click();
+  menu = await details(page);
+  await expect(menu.getByRole('button', { name: 'Mute conversation', exact: true })).toBeVisible();
+  await expect(menu.getByRole('button', { name: 'Unpin conversation', exact: true })).toBeVisible();
+});
+
 for (const denied of [false, true]) {
   test(`message menu copy ${denied ? 'failure keeps readable text' : 'success closes the menu'}`, async ({
     page,

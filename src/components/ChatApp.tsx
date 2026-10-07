@@ -2737,6 +2737,7 @@ export default function ChatApp() {
                 >
                   <ConversationAvatar userId={state.user.id} conversation={c} small />
                   <span className={c.unread ? 'unread' : ''}>{c.name}</span>
+                  {c.kind !== 'space' && c.muted && <BellOff size={13} />}
                   {c.pinned && <Pin size={13} />}
                   {!!c.unread && <span className="unread-dot" />}
                 </button>

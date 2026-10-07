@@ -6,6 +6,7 @@ import { once } from 'node:events';
 import { finished } from 'node:stream/promises';
 import { createServer } from 'node:net';
 import { captureBinding, bindingChanges } from './test-browser-suites';
+import { requireOwnedServerShutdown } from './coverage-server-lifecycle';
 async function main() {
   const root = process.cwd(),
     output = resolve('test-results/combined-coverage'),
@@ -184,7 +185,8 @@ async function main() {
       browserError = error;
     }
     try {
-      server.kill('SIGTERM');
+      const requested =
+        server.exitCode === null && server.signalCode === null && server.kill('SIGTERM');
       const result = await Promise.race([
         exit,
         new Promise<never>((_, reject) =>
@@ -194,8 +196,7 @@ async function main() {
           }, 10_000)).unref(),
         ),
       ]);
-      if (result[0] !== 0 && result[1] !== 'SIGTERM')
-        throw new Error('Unexpected coverage server termination.');
+      requireOwnedServerShutdown(requested, result[0], result[1]);
       execution.server = { exitCode: ready ? 0 : 1, processExitCode: result[0], signal: result[1] };
     } catch (error) {
       cleanupError = error;

@@ -135,6 +135,8 @@ jobs:
       # Pixel baselines are macOS-specific; these suites assert behavior without
       # updating or weakening the separate macOS screenshot gate.
       - run: npm run test:security
+      - name: Assert avatar CSP without functional-coverage bypass
+        run: npx playwright test --config playwright.frontend-security.config.ts --grep 'image CSP permits Google avatar hosts'
       - run: npm run test:reliability
       - run: npm run test:offline
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -218,10 +220,13 @@ jobs:
       # All20 existing functional/visual cases; reviewed darwin baselines only.
       # No --update-snapshots or --ignore-snapshots is permitted in this job.
       - run: npx playwright test --config playwright.landing-preview.config.ts
+      - run: npx playwright test --config playwright.header-sidebar.config.ts
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: failure()
         with:
           name: landing-screenshot-failures
-          path: test-results/landing-preview/
+          path: |
+            test-results/landing-preview/
+            test-results/header-sidebar/
           if-no-files-found: ignore
           retention-days: 7
