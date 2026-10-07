@@ -14,6 +14,7 @@ const userId = "00000000-0000-4000-8000-000000000111";
 const conversationId = "00000000-0000-4000-8000-000000000222";
 const ownId = "00000000-0000-4000-8000-000000000444";
 const peerId = "00000000-0000-4000-8000-000000000555";
+const protectedConversationId = "00000000-0000-4000-8000-000000000666";
 type WireAction = ChatAction & { clientActionId?: string; clientMessageId?: string };
 
 class FaultFixture {
@@ -34,10 +35,13 @@ class FaultFixture {
   uploads = 0;
   getFailures = 0;
   release: (() => void) | null = null;
+  completionMarker: string | null = null;
+  completionMarkerExclusiveToPost = false;
   staged = new Map<string, { name: string; type: string; size: number; url: string }>();
   receipts = new Map<string, string | undefined>();
-  publicState() {
+  publicState(includeCompletionMarker = true) {
     const state = structuredClone(this.state);
+    if (!includeCompletionMarker && this.completionMarker) state.messages = state.messages.filter(message => message.text !== this.completionMarker);
     for (const message of state.messages) message.attachments = message.attachments.map((file, index) => ({ ...file, url: `/api/attachments?messageId=${message.id}&index=${index}` }));
     return state;
   }
@@ -64,7 +68,8 @@ class FaultFixture {
       else if (action.type === "create") {
         id = randomUUID();
         this.state.conversations.push({ id, name: action.name, kind: action.kind, members: [this.user], updatedAt: new Date().toISOString(), unread: 0 });
-      } else if (action.type === "leave") this.state.conversations = [];
+      } else if (action.type === "leave") this.state.conversations = this.state.conversations.filter(conversation => conversation.id !== action.conversationId);
+      if (this.completionMarker) this.state.messages.push({ id: randomUUID(), conversationId: protectedConversationId, author: this.peer, text: this.completionMarker, createdAt: new Date().toISOString(), reactions: [], attachments: [] });
       if (receipt) this.receipts.set(receipt, id);
     }
     if (this.mode === "lost") {
@@ -74,10 +79,13 @@ class FaultFixture {
     return route.fulfill({ status: 200, json: { state: this.publicState(), id } });
   }
 }
+const activeFixtures = new WeakMap<Page, FaultFixture>();
+test.afterEach(async ({ page }) => { activeFixtures.get(page)?.release?.(); });
 
 async function fixture(page: Page, context: BrowserContext, phone = false) {
   if (phone) await page.setViewportSize({ width: 390, height: 844 });
   const api = new FaultFixture();
+  activeFixtures.set(page, api);
   const now = Math.floor(Date.now() / 1000);
   const token = [Buffer.from('{"alg":"HS256","typ":"JWT"}').toString("base64url"), Buffer.from(JSON.stringify({ sub: userId, role: "authenticated", aud: "authenticated", iat: now, exp: now + 3600 })).toString("base64url"), "LOCAL_TEST_INVALID_SIGNATURE"].join(".");
   const user = { id: userId, aud: "authenticated", role: "authenticated", email: api.user.email, app_metadata: { provider: "google", providers: ["google"] }, user_metadata: { full_name: api.user.name }, created_at: new Date().toISOString(), email_confirmed_at: new Date().toISOString() };
@@ -98,7 +106,7 @@ async function fixture(page: Page, context: BrowserContext, phone = false) {
       if (request.method() === "POST") return api.post(route);
       if (api.getOutage) { api.getFailures++; return route.fulfill({ status: 503, json: { error: "Temporary refresh outage." } }); }
       const actionId = url.searchParams.get("clientActionId");
-      return route.fulfill({ status: 200, json: { state: api.publicState(), ...(actionId && api.receipts.has(actionId) ? { actionId, id: api.receipts.get(actionId) } : {}) } });
+      return route.fulfill({ status: 200, json: { state: api.publicState(!api.completionMarkerExclusiveToPost), ...(actionId && api.receipts.has(actionId) ? { actionId, id: api.receipts.get(actionId) } : {}) } });
     }
     if (url.pathname === "/api/uploads") {
       api.uploads++;
@@ -114,7 +122,7 @@ async function fixture(page: Page, context: BrowserContext, phone = false) {
     return route.continue();
   });
   await page.goto(baseURL);
-  if (phone) await page.getByRole("button", { name: /Network workspace/ }).first().click();
+  await page.getByRole("button", { name: /Network workspace/ }).first().click();
   await expect(page.getByRole("main").getByRole("heading", { name: "Network workspace", exact: true })).toBeVisible();
   return api;
 }
@@ -128,8 +136,13 @@ async function clearNotices(page: Page) {
 }
 async function failure(page: Page, api: FaultFixture, type: ChatAction["type"]) {
   await expect.poll(() => api.actions.filter(action => action.type === type).length).toBeGreaterThan(0);
-  await expect(page.locator(".toast")).toContainText("Temporary service outage.");
-  await expect(page.locator(".toast > svg")).toHaveClass(/lucide-info/);
+  if (type === "profile") {
+    await expect(page.getByRole("dialog", { name: "Your profile", exact: true }).getByRole("alert")).toHaveText("Temporary service outage. Please try again.");
+    await expect(page.locator(".toast").filter({ hasText: "Temporary service outage." })).toHaveCount(0);
+  } else {
+    await expect(page.locator(".toast")).toContainText("Temporary service outage.");
+    await expect(page.locator(".toast > svg")).toHaveClass(/lucide-info/);
+  }
   await expect(page.getByRole("button", { name: "Continue with Google", exact: true })).toHaveCount(0);
 }
 
@@ -172,7 +185,7 @@ test("failed image send keeps the payload, gives an honest storage warning and r
   await page.locator('input[type="file"]').setInputFiles({ name: "retained-image.png", mimeType: "image/png", buffer: png });
   const input = page.getByRole("textbox", { name: "Message", exact: true });
   await input.fill("Keep my image and text until confirmed.");
-  await expect(page.locator(".composer-status")).toContainText("Reloading may require adding them again.");
+  await expect(page.locator(".composer-status")).toContainText("After reloading, check the conversation before adding files and sending again.");
   api.mode = "reject";
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(page.locator(".composer-status")).toContainText("Send not confirmed. Your draft is kept here. Press Send to retry.");
@@ -374,3 +387,80 @@ test("refresh outage keeps navigation, search and local appearance available", a
   await page.getByRole("main").getByRole("button", { name: /^Network workspace / }).click();
   await expect(page.getByRole("article").filter({ hasText: "Recovered data appears without replacing the workspace." })).toBeVisible();
 });
+
+for (const type of ["create", "conversation", "invite", "edit", "leave", "delete"] as const) {
+  test(`held ${type} completion preserves a newer profile and separate conversation draft`, async ({ page, context }) => {
+    const api = await fixture(page, context);
+    api.state.conversations.push({ id: protectedConversationId, name: "Protected workspace", kind: "space", members: [api.user, api.peer], unread: 0, updatedAt: new Date().toISOString() });
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await expect(page.getByRole("button", { name: "Protected workspace", exact: true })).toBeVisible();
+    await page.getByRole("textbox", { name: "Message", exact: true }).fill("Original conversation draft remains owned by its conversation.");
+    api.completionMarker = `Authoritative response for held ${type} is rendered.`;
+    api.completionMarkerExclusiveToPost = true;
+    api.mode = "hold";
+    if (type === "create") {
+      await page.getByRole("button", { name: "New chat", exact: true }).click();
+      const form = page.getByRole("dialog", { name: "Start a conversation", exact: true });
+      await form.getByRole("combobox", { name: "To", exact: true }).fill("late-create@example.invalid");
+      await form.getByRole("button", { name: "Start chat", exact: true }).click();
+    } else if (type === "edit" || type === "delete") {
+      await own(page).hover();
+      if (type === "edit") {
+        await own(page).getByRole("button", { name: "Edit message", exact: true }).click();
+        const form = page.getByRole("dialog", { name: "Edit message", exact: true });
+        await form.getByRole("textbox", { name: "Message", exact: true }).fill("Acknowledged old edit.");
+        await form.getByRole("button", { name: "Save", exact: true }).click();
+      } else {
+        await own(page).getByRole("button", { name: "More actions", exact: true }).click();
+        await page.getByRole("dialog").getByRole("button", { name: "Delete message", exact: true }).click();
+        await page.getByRole("dialog", { name: "Delete this message?", exact: true }).getByRole("button", { name: "Delete message", exact: true }).click();
+      }
+    } else {
+      await page.getByRole("button", { name: "Conversation details", exact: true }).click();
+      if (type === "conversation") {
+        await page.getByRole("dialog").getByRole("button", { name: "Edit details and section" }).click();
+        const form = page.getByRole("dialog", { name: "Conversation settings", exact: true });
+        await form.getByRole("textbox", { name: "Name", exact: true }).fill("Acknowledged old conversation rename");
+        await form.getByRole("button", { name: "Save", exact: true }).click();
+      } else if (type === "invite") {
+        await page.getByRole("dialog").getByRole("button", { name: "Add people", exact: true }).click();
+        const form = page.getByRole("dialog", { name: "Add people", exact: true });
+        await form.getByRole("textbox", { name: "Email addresses" }).fill("late-invite@example.invalid");
+        await form.getByRole("button", { name: "Add people", exact: true }).click();
+      } else {
+        await page.getByRole("dialog").getByRole("button", { name: "Leave conversation", exact: true }).click();
+        await page.getByRole("dialog", { name: "Leave this conversation?", exact: true }).getByRole("button", { name: "Leave conversation", exact: true }).click();
+      }
+    }
+    try {
+      await expect.poll(() => api.actions.filter(action => action.type === type).length).toBe(1);
+      await expect.poll(() => !!api.release).toBe(true);
+      await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: "Protected workspace", exact: true }).click();
+      await expect(page.getByRole("main").getByRole("heading", { name: "Protected workspace", exact: true })).toBeVisible();
+      await page.getByRole("textbox", { name: "Message", exact: true }).fill("A separate newer draft must remain intact.");
+      await page.getByRole("button", { name: "Your profile", exact: true }).first().click();
+      const profile = page.getByRole("dialog", { name: "Your profile", exact: true });
+      await profile.getByRole("textbox", { name: "Display name", exact: true }).fill("New profile while old action waits");
+      await profile.getByRole("textbox", { name: "Status", exact: true }).fill("New local status");
+      api.mode = "ok"; api.release!();
+      const receipt = api.actions.find(action => action.type === type)!.clientActionId;
+      await expect.poll(() => !!receipt && api.receipts.has(receipt)).toBe(true);
+      const committed = () => type === "create" ? api.state.conversations.length === 3 : type === "conversation" ? api.state.conversations.find(c => c.id === conversationId)?.name === "Acknowledged old conversation rename" : type === "invite" ? api.state.conversations.find(c => c.id === conversationId)?.members.some(p => p.email === "late-invite@example.invalid") : type === "edit" ? api.state.messages.find(m => m.id === ownId)?.text === "Acknowledged old edit." : type === "delete" ? api.state.messages.find(m => m.id === ownId)?.deleted : !api.state.conversations.some(c => c.id === conversationId);
+      await expect.poll(committed).toBe(true);
+      // A peer-message marker exists only in the committed response. Requiring
+      // the real UI row prevents a pre-ACK snapshot or intervening GET from
+      // satisfying the guard before the old POST is processed by the controller.
+      await expect(page.getByRole("article").filter({ hasText: api.completionMarker })).toBeVisible();
+      api.completionMarkerExclusiveToPost = false;
+      await expect(profile).toBeVisible();
+      await expect(profile.getByRole("textbox", { name: "Display name", exact: true })).toHaveValue("New profile while old action waits");
+      await expect(profile.getByRole("textbox", { name: "Status", exact: true })).toHaveValue("New local status");
+      await expect(page.locator(".toast").filter({ hasText: /Conversation started|Conversation updated|People added|Message updated|Message deleted|You left the conversation/ })).toHaveCount(0);
+      await profile.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(page.getByRole("main").getByRole("heading", { name: "Protected workspace", exact: true })).toBeVisible();
+      await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveValue("A separate newer draft must remain intact.");
+      expect(api.actions.filter(action => action.type === type)).toHaveLength(1);
+    } finally { api.mode = "ok"; api.release?.(); }
+  });
+}

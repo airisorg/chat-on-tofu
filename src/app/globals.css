@@ -145,6 +145,7 @@ h3,
 .nav-item,
 .sidebar-conversation,
 .sidebar-group-heading,
+.sidebar-shortcuts-heading,
 .search-box input,
 .mobile-search input,
 .status-button,
@@ -525,7 +526,7 @@ button:hover {
 .sidebar-shortcuts-heading {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-height: 24px;
   padding: 0;
   text-align: left;
@@ -536,6 +537,12 @@ button:hover {
 }
 .sidebar-collapsed .sidebar-shortcuts-heading {
   display: none;
+}
+.sidebar-shortcuts-heading > svg,
+.sidebar-group-heading > button:first-child > svg {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
 }
 .nav-item {
   height: 35px;
@@ -585,8 +592,10 @@ button:hover {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
+  line-height: 24px;
+  color: var(--muted);
   border-radius: 18px;
   padding: 7px 8px 7px 0;
   text-align: left;
@@ -1759,46 +1768,6 @@ button:hover {
   margin-bottom: 6px;
   color: var(--ink);
   font-weight: 500;
-}
-.profile-summary {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 9px;
-  margin: 2px 0 24px;
-}
-.profile-summary strong {
-  font-size: 18px;
-  font-weight: 500;
-  margin-top: 5px;
-}
-.profile-summary > span:not(.avatar) {
-  font-size: 11px;
-  color: var(--muted);
-}
-.profile-summary .demo-badge {
-  margin-top: 5px;
-}
-.profile-summary + form {
-  gap: 16px;
-}
-.status-presets {
-  display: flex;
-  gap: 5px;
-  flex-wrap: wrap;
-}
-.status-presets > button {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  min-height: 35px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  font-size: 10px;
-}
-.profile-summary ~ .dialog-note {
-  margin-top: 18px;
 }
 .settings-content {
   display: flex;
@@ -3186,10 +3155,6 @@ button:hover {
     min-height: 44px;
     font-size: 12px;
   }
-  .status-presets > button {
-    min-height: 44px;
-    font-size: 10px;
-  }
   .setting-row select {
     font-size: 16px;
     max-width: 115px;
@@ -3712,7 +3677,6 @@ button:hover {
   .dialog-footer > .text-button,
   .dialog-footer > .primary-button,
   .dialog-footer > .danger-button,
-  .status-presets > button,
   .setting-row select {
     min-height: 44px;
   }
@@ -4027,6 +3991,11 @@ button:hover {
 /* Fine-pointer desktop density follows the measured Google Chat sidebar and
    populated Home row. Coarse-pointer layouts retain their touch targets. */
 @media (min-width: 800px) and (pointer: fine) {
+  /* Keep full conversation headers consistent with the measured Home inset.
+     This adapts that spacing; it is not a measured Google Space header. */
+  .conversation-header {
+    padding-inline: 24px;
+  }
   .sidebar .new-chat-button {
     margin-bottom: 20px;
   }
@@ -4035,9 +4004,9 @@ button:hover {
     margin-bottom: 12px;
   }
   .sidebar-shortcuts-heading {
-    height: 20px;
-    min-height: 20px;
-    line-height: 20px;
+    height: 24px;
+    min-height: 24px;
+    line-height: 24px;
   }
   #shortcut-navigation-items {
     gap: 0;

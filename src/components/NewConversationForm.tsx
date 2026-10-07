@@ -89,6 +89,7 @@ export default function NewConversationForm({
   }, [kind]);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (busy) return;
     const values = [...recipients];
     const typed = query
       .trim()
@@ -155,6 +156,7 @@ export default function NewConversationForm({
         <div className="kind-tabs" aria-label="Conversation type">
           {(["dm", "group", "space"] as const).map((value) => (
             <button
+              disabled={busy}
               type="button"
               key={value}
               className={kind === value ? "selected" : ""}
@@ -178,6 +180,7 @@ export default function NewConversationForm({
               {kind === "group" ? " optional" : ""}
             </span>
             <input
+              disabled={busy}
               name="name"
               required={kind === "space"}
               maxLength={80}
@@ -202,6 +205,7 @@ export default function NewConversationForm({
                 <span key={person.email} className={styles.chip}>
                   <span title={person.email}>{person.name}</span>
                   <button
+              disabled={busy}
                     type="button"
                     aria-label={`Remove ${person.name}`}
                     onClick={() =>
@@ -220,6 +224,7 @@ export default function NewConversationForm({
             <div className={styles.search}>
               <Search size={18} />
               <input
+              disabled={busy}
                 ref={input}
                 id={`${listId}-input`}
                 role="combobox"
@@ -285,19 +290,19 @@ export default function NewConversationForm({
                 aria-label="Conversation actions"
               >
                 {kind !== "dm" && (
-                  <button type="button" onClick={() => chooseKind("dm")}>
+                  <button disabled={busy} type="button" onClick={() => chooseKind("dm")}>
                     <ArrowLeft size={20} />
                     Direct message
                   </button>
                 )}
                 {kind !== "space" && (
-                  <button type="button" onClick={() => chooseKind("space")}>
+                  <button disabled={busy} type="button" onClick={() => chooseKind("space")}>
                     <Hash size={20} />
                     Create a space
                   </button>
                 )}
                 {kind !== "group" && (
-                  <button type="button" onClick={() => chooseKind("group")}>
+                  <button disabled={busy} type="button" onClick={() => chooseKind("group")}>
                     <Users size={20} />
                     Start a group
                   </button>
@@ -315,6 +320,7 @@ export default function NewConversationForm({
               >
                 {suggestions.map((person, index) => (
                   <button
+              disabled={busy}
                     id={`${listId}-option-${index}`}
                     role="option"
                     aria-selected={active === index}
@@ -355,6 +361,7 @@ export default function NewConversationForm({
           <label className={styles.additional}>
             Description <span className="optional">optional</span>
             <textarea
+              disabled={busy}
               name="description"
               rows={3}
               maxLength={500}

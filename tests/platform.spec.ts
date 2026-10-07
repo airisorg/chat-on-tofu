@@ -725,11 +725,10 @@ test("dark mode keeps all new-chat modes, forms, menus, recording errors and des
     .getByRole("banner")
     .getByRole("button", { name: "Your profile", exact: true })
     .click();
-  await readable(
-    page
-      .getByRole("dialog")
-      .locator(`${forms}, .status-presets>button, .profile-summary>strong`),
-  );
+  const profile = page.getByRole("dialog", { name: "Your profile", exact: true });
+  await expect(profile.locator('[aria-label="Status presets"] > button')).toHaveCount(3);
+  await expect(profile.locator("strong")).toHaveCount(1);
+  await readable(profile.locator(`${forms}, [aria-label="Status presets"] > button, strong`));
   await page.keyboard.press("Escape");
 
   await openDesign(page, false);

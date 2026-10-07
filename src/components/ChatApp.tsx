@@ -63,6 +63,7 @@ import VoiceRecorder from "./VoiceRecorder";
 import AudioPreview from "./AudioPreview";
 import splitStyles from "./ChatAppSplit.module.css";
 import InstallHelp from "./InstallHelp";
+import ProfileForm, { type ProfileValues } from "./ProfileForm";
 import ContextPopover from "./ContextPopover";
 import LandingDetails from "./LandingDetails";
 import { MaterialHelp, MaterialSettings, MaterialNewChat } from "./MaterialIcons";
@@ -283,7 +284,7 @@ function Dialog({
     const nodes = () =>
       Array.from(
         dialog?.querySelectorAll<HTMLElement>(
-          "button:not([disabled]), input, select, textarea, a[href]",
+          "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href]",
         ) || [],
       );
     const first = nodes().find((x) => x.tagName === "INPUT") || nodes()[0];
@@ -293,15 +294,12 @@ function Dialog({
       if (event.key === "Tab") {
         const elements = nodes();
         if (!elements.length) return;
-        const start = elements[0],
-          end = elements[elements.length - 1];
-        if (event.shiftKey && document.activeElement === start) {
-          event.preventDefault();
-          end.focus();
-        } else if (!event.shiftKey && document.activeElement === end) {
-          event.preventDefault();
-          start.focus();
-        }
+        const current = elements.indexOf(document.activeElement as HTMLElement);
+        const next = event.shiftKey
+          ? (current <= 0 ? elements.length - 1 : current - 1)
+          : (current + 1) % elements.length;
+        event.preventDefault();
+        elements[next].focus();
       }
     }
     document.addEventListener("keydown", key);
@@ -406,7 +404,9 @@ export default function ChatApp() {
   const [draftStorageIssue, setDraftStorageIssue] = useState<"attachments" | "all" | null>(null);
   const [saveDrafts, setSaveDrafts] = useState(true);
   const draftRetention = useRef<{ owner: string | null; enabled: boolean }>({ owner: null, enabled: true });
-  const [busy, setBusy] = useState(false);
+  const dialogInFlight = useRef(new Set<NonNullable<Modal>>());
+  const [pendingDialogs, setPendingDialogs] = useState(new Set<NonNullable<Modal>>());
+  const busy = !!modal && pendingDialogs.has(modal);
   const [toast, setToast] = useState("");
   const [theme, setTheme] = useState("system");
   const [themeReady, setThemeReady] = useState(false);
@@ -476,6 +476,10 @@ export default function ChatApp() {
     null,
   );
   const state = chat.state;
+  const modalContext = useRef({ owner: state?.user.id, modal });
+  modalContext.current = { owner: state?.user.id, modal };
+  const profileInFlight = useRef(new Set<string>());
+  const [profilePendingOwners, setProfilePendingOwners] = useState(new Set<string>());
   const currentUserNow = useRef<string | null>(null);
   currentUserNow.current = state?.user.id || null;
   const fileOwner = state?.user.id || "";
@@ -1267,68 +1271,66 @@ export default function ChatApp() {
       openConversation(existing);
       return;
     }
-    setBusy(true);
-    try {
-      const id = await act({
-        type: "create",
-        name,
-        kind,
-        emails,
-        description,
+    await modalAction({ type: "create", name, kind, emails, description },
+      kind === "space" ? "Space created" : "Conversation started", id => {
+        if (id) {
+          setSelectedId(id);
+          setThreadId(null);
+          setDraft("");
+          setAttachments([]);
+        }
       });
-      setModal(null);
-      if (id) {
-        setSelectedId(id);
-        setThreadId(null);
-        setDraft("");
-        setAttachments([]);
+  }
+  async function modalAction(action: ChatAction, success: string, complete?: (result: string | undefined) => void) {
+    const owner = state?.user.id;
+    const submittedModal = modal;
+    if (!owner || !submittedModal || dialogInFlight.current.has(submittedModal)) return;
+    dialogInFlight.current.add(submittedModal);
+    setPendingDialogs(new Set(dialogInFlight.current));
+    const isCurrent = () => modalContext.current.owner === owner && modalContext.current.modal === submittedModal;
+    try {
+      const result = await chat.action(action);
+      if (isCurrent()) {
+        setToast(success);
+        setModal(null);
+        complete?.(result);
       }
-      setToast(kind === "space" ? "Space created" : "Conversation started");
-    } catch {
+    } catch (error) {
+      if (isCurrent()) setToast(error instanceof Error ? error.message : "Something went wrong. Please try again.");
     } finally {
-      setBusy(false);
+      dialogInFlight.current.delete(submittedModal);
+      setPendingDialogs(new Set(dialogInFlight.current));
     }
   }
-  async function submitProfile(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const data = new FormData(e.currentTarget);
-    setBusy(true);
+  async function saveProfile(values: ProfileValues) {
+    const owner = state?.user.id;
+    const submittedModal = modal;
+    if (!owner || submittedModal?.type !== "profile" || profileInFlight.current.has(owner)) return;
+    profileInFlight.current.add(owner);
+    setProfilePendingOwners(new Set(profileInFlight.current));
+    const isCurrent = () => modalContext.current.owner === owner && modalContext.current.modal === submittedModal;
     try {
-      await act(
-        {
-          type: "profile",
-          name: String(data.get("name") || ""),
-          status: String(data.get("status") || ""),
-        },
-        "Profile updated",
-      );
-      setModal(null);
-    } catch {
+      await chat.action({ type: "profile", ...values });
+      // A response belongs to this form and account, even if another dialog opens.
+      if (isCurrent()) {
+        setToast("Profile updated");
+        setModal(null);
+      }
     } finally {
-      setBusy(false);
+      profileInFlight.current.delete(owner);
+      setProfilePendingOwners(new Set(profileInFlight.current));
     }
   }
   async function submitConversation(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (modal?.type !== "conversation") return;
     const data = new FormData(e.currentTarget);
-    setBusy(true);
-    try {
-      await act(
-        {
-          type: "conversation",
-          conversationId: modal.conversation.id,
-          name: String(data.get("name") || ""),
-          description: String(data.get("description") || ""),
-          section: String(data.get("section") || ""),
-        },
-        "Conversation updated",
-      );
-      setModal(null);
-    } catch {
-    } finally {
-      setBusy(false);
-    }
+    await modalAction({
+      type: "conversation", conversationId: modal.conversation.id,
+      name: String(data.get("name") || ""),
+      description: String(data.get("description") || ""),
+      section: String(data.get("section") || ""),
+    }, "Conversation updated");
   }
   function showMessage(message: Message) {
     setModal({ type: "message", message });
@@ -2826,19 +2828,7 @@ export default function ChatApp() {
                       ? state.user.status
                       : "Active") === status
                   }
-                  onClick={async () => {
-                    setBusy(true);
-                    try {
-                      await act(
-                        { type: "profile", status },
-                        `Status set to ${status}`,
-                      );
-                      setModal(null);
-                    } catch {
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
+                  onClick={() => void modalAction({ type: "profile", status }, `Status set to ${status}`)}
                   disabled={busy}
                 >
                   <span
@@ -2947,81 +2937,16 @@ export default function ChatApp() {
             />
           )}
           {modal.type === "profile" && (
-            <>
-              <div className="profile-summary">
-                <Avatar person={state.user} size="large" />
-                <strong>{state.user.name}</strong>
-                <span>{state.user.email}</span>
-                {chat.demo && (
-                  <span className="demo-badge">
-                    DEMO PROFILE · NOT SIGNED IN
-                  </span>
-                )}
-              </div>
-              <form onSubmit={submitProfile}>
-                <label>
-                  Display name
-                  <input
-                    name="name"
-                    defaultValue={state.user.name}
-                    maxLength={80}
-                    required
-                  />
-                </label>
-                <label>
-                  Status
-                  <input
-                    name="status"
-                    defaultValue={state.user.status || ""}
-                    placeholder="e.g. Focusing on something good 🌱"
-                    maxLength={80}
-                  />
-                </label>
-                <div className="status-presets">
-                  {["Active", "Away", "Do not disturb"].map((status) => (
-                    <button
-                      key={status}
-                      type="button"
-                      onClick={() => {
-                        run(
-                          { type: "profile", status },
-                          `Status set to ${status}`,
-                        );
-                        setModal(null);
-                      }}
-                    >
-                      <span
-                        className={`status-dot ${status === "Do not disturb" ? "dnd" : status === "Away" ? "away" : ""}`}
-                      />
-                      {status}
-                    </button>
-                  ))}
-                </div>
-                <div className="dialog-footer">
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() => {
-                      void chat.signOut();
-                      setModal(null);
-                    }}
-                  >
-                    {chat.demo ? "Leave demo" : "Sign out"}
-                    <LogOut size={16} />
-                  </button>
-                  <button className="primary-button" disabled={busy}>
-                    Save
-                  </button>
-                </div>
-              </form>
-              {chat.demo && (
-                <p className="dialog-note">
-                  Demo conversations are private to this browser. Sign in with
-                  Google to chat with your friends. Your conversations are
-                  private to this app.
-                </p>
-              )}
-            </>
+            <ProfileForm
+              key={state.user.id}
+              person={state.user}
+              avatar={<Avatar person={state.user} size="large" />}
+              demo={chat.demo}
+              pending={profilePendingOwners.has(state.user.id)}
+              onSave={saveProfile}
+              onClose={closeModal}
+              onSignOut={() => { void chat.signOut(); closeModal(); }}
+            />
           )}
           {modal.type === "settings" && (
             <div className="settings-content">
@@ -3348,6 +3273,7 @@ export default function ChatApp() {
               <label>
                 Name
                 <input
+                  disabled={busy}
                   name="name"
                   defaultValue={modal.conversation.name}
                   required
@@ -3357,6 +3283,7 @@ export default function ChatApp() {
               <label>
                 Description
                 <textarea
+                  disabled={busy}
                   name="description"
                   defaultValue={modal.conversation.description || ""}
                   rows={3}
@@ -3366,6 +3293,7 @@ export default function ChatApp() {
               <label>
                 Section
                 <input
+                  disabled={busy}
                   name="section"
                   defaultValue={modal.conversation.section || ""}
                   list="section-names"
@@ -3401,23 +3329,10 @@ export default function ChatApp() {
               onSubmit={async (e) => {
                 e.preventDefault();
                 const data = new FormData(e.currentTarget);
-                setBusy(true);
-                try {
-                  await act(
-                    {
-                      type: "invite",
-                      conversationId: modal.conversation.id,
-                      emails: String(data.get("emails") || "")
-                        .split(/[,\s]+/)
-                        .filter(Boolean),
-                    },
-                    "People added",
-                  );
-                  setModal(null);
-                } catch {
-                } finally {
-                  setBusy(false);
-                }
+                await modalAction({
+                  type: "invite", conversationId: modal.conversation.id,
+                  emails: String(data.get("emails") || "").split(/[,\s]+/).filter(Boolean),
+                }, "People added");
               }}
             >
               <p className="dialog-note">
@@ -3427,6 +3342,7 @@ export default function ChatApp() {
               <label>
                 Email addresses
                 <input
+                  disabled={busy}
                   name="emails"
                   placeholder="maya@example.com, alex@example.com"
                   required
@@ -3460,20 +3376,11 @@ export default function ChatApp() {
                 </button>
                 <button
                   className="danger-button"
-                  onClick={async () => {
-                    try {
-                      await act(
-                        {
-                          type: "leave",
-                          conversationId: modal.conversation.id,
-                        },
-                        "You left the conversation",
-                      );
-                      setModal(null);
-                      setSelectedId(null);
-                      setThreadId(null);
-                    } catch {}
-                  }}
+                  disabled={busy}
+                  onClick={() => void modalAction({ type: "leave", conversationId: modal.conversation.id }, "You left the conversation", () => {
+                    setSelectedId(null);
+                    setThreadId(null);
+                  })}
                 >
                   Leave conversation
                 </button>
@@ -3511,14 +3418,14 @@ export default function ChatApp() {
               </button>
               <button
                 onClick={async () => {
+                  const submittedModal = modal;
+                  const owner = state.user.id;
+                  const isCurrent = () => modalContext.current.owner === owner && modalContext.current.modal === submittedModal;
                   try {
                     await navigator.clipboard.writeText(modal.message.text);
-                    setToast("Message copied");
-                    setModal(null);
+                    if (isCurrent()) { setToast("Message copied"); setModal(null); }
                   } catch {
-                    setToast(
-                      "Copy is unavailable in this browser. Select the message text to copy it.",
-                    );
+                    if (isCurrent()) setToast("Copy is unavailable in this browser. Select the message text to copy it.");
                   }
                 }}
               >
@@ -3576,22 +3483,13 @@ export default function ChatApp() {
                   new FormData(e.currentTarget).get("text") || "",
                 ).trim();
                 if (!text) return;
-                setBusy(true);
-                try {
-                  await act(
-                    { type: "edit", messageId: modal.message.id, text },
-                    "Message updated",
-                  );
-                  setModal(null);
-                } catch {
-                } finally {
-                  setBusy(false);
-                }
+                await modalAction({ type: "edit", messageId: modal.message.id, text }, "Message updated");
               }}
             >
               <label>
                 Message
                 <textarea
+                  disabled={busy}
                   name="text"
                   defaultValue={modal.message.text}
                   required
@@ -3628,15 +3526,8 @@ export default function ChatApp() {
                 </button>
                 <button
                   className="danger-button"
-                  onClick={async () => {
-                    try {
-                      await act(
-                        { type: "delete", messageId: modal.message.id },
-                        "Message deleted",
-                      );
-                      setModal(null);
-                    } catch {}
-                  }}
+                  disabled={busy}
+                  onClick={() => void modalAction({ type: "delete", messageId: modal.message.id }, "Message deleted")}
                 >
                   Delete message
                 </button>

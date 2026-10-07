@@ -1,0 +1,207 @@
+/* Profile editing is an app extension. These typography/surface tokens come
+   from measured Google Chat settings and presence controls, not an account-card
+   pixel oracle. Keep the existing avatar size until that state is observed. */
+:global(.dialog):has(.content) {
+  width: 460px;
+  border-radius: 28px;
+  padding: 8px 24px 24px;
+  background: var(--search);
+}
+
+:global(.dialog):has(.content) > :global(.dialog-header) {
+  min-height: 52px;
+  margin-bottom: 12px;
+}
+
+:global(.dialog):has(.content) > :global(.dialog-header) h2 {
+  font-family: var(--font-title);
+  font-size: 22px;
+  font-weight: 400;
+  line-height: 20px;
+  letter-spacing: normal;
+  padding: 16px 0;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 20px;
+  font-family: var(--font-title);
+  color: var(--ink);
+}
+
+.identity {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.identityText {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  text-align: center;
+}
+
+.identityText strong,
+.identityText > span {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.identityText strong {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+}
+
+.identityText > span {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+  color: var(--muted);
+}
+
+.content .form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.content .form label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+}
+
+.content .form input {
+  min-width: 0;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+}
+
+.content .form input:disabled {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.content .presets > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 12px;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 24px;
+}
+
+.content .presets > button[aria-pressed="true"] {
+  background: var(--selected);
+  border-color: var(--selected);
+  color: var(--ink);
+}
+
+.content .presets > button:disabled {
+  cursor: default;
+}
+
+.editingActions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.content .editingActions > button,
+.content .accountAction > button {
+  min-height: 36px;
+  padding: 0 20px;
+  border-radius: 18px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.accountAction {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  min-width: 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.error {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--error-line);
+  border-radius: 8px;
+  background: var(--error-bg);
+  color: var(--error-ink);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.content > :global(.dialog-note) {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+}
+
+@media (max-width: 767px), (pointer: coarse) {
+  :global(.dialog):has(.content) {
+    padding-inline: 20px;
+  }
+
+  .content .form input {
+    font-size: 16px;
+    min-height: 48px;
+  }
+
+  .content .presets > button,
+  .content .editingActions > button,
+  .content .accountAction > button {
+    min-width: 44px;
+    min-height: 44px;
+    border-radius: 22px;
+  }
+}

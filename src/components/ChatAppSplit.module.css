@@ -32,7 +32,9 @@
   padding: 8px 16px;
   border-bottom: 1px solid var(--line);
 }
-.previewHeader > :global(.avatar) { width: 24px; height: 24px; font-size: 12px; }
+.previewHeader > :global(.avatar),
+.previewHeader > :global(.space-avatar) { width: 24px; height: 24px; font-size: 12px; flex-shrink: 0; }
+.previewHeader > :global(.space-avatar) svg { width: 14px; height: 14px; }
 .previewTitle {
   min-width: 0;
   flex: 1;

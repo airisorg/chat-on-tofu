@@ -61,6 +61,8 @@ Install test browsers with `npx playwright install chromium webkit` if needed. O
 
 Use `npm run test:geometry` for measured history/composer alignment, unread-count insets and short-window draft controls in Chrome and WebKit. See [layout validation](docs/layout-validation.md) for the Google reference measurements, failing baselines and the distinction between screenshot drift checks and reference parity.
 
+Use `npm run test:profile` for profile editing, pending requests, retries, account changes, keyboard containment and responsive layout. Use `npm run test:header-sidebar` for shared sidebar typography, consistent full-header insets, compact preview avatars and disclosure controls. These local fixtures test app contracts; selected Google typography tokens do not establish exact account-card or Space-header parity.
+
 Desktop and mobile viewport screenshots are generated during verification. Physical iPhone installation, hardware keyboard behavior and standalone Google account switching require device acceptance; desktop emulation cannot establish those results.
 
 Reference design sources: [Google Chat interface](https://support.google.com/chat/answer/7652236?co=GENIE.Platform%3DDesktop&hl=en), [Google Chat iPhone navigation](https://support.google.com/chat/answer/14170781?co=GENIE.Platform%3DiOS&hl=en), [official desktop screenshot](https://workspace.google.com/blog/product-announcements/welcome-new-google-chat), [current Google Chat product page](https://workspace.google.com/products/chat/), [Apple Home Screen instructions](https://support.apple.com/en-lamr/guide/iphone/iphea86e5236/ios).

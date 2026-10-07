@@ -24,7 +24,9 @@
     "test:interaction": "playwright test --config playwright.interaction.config.ts",
     "test:security": "playwright test --config playwright.security.config.ts",
     "test:frontend-security": "playwright test --config playwright.frontend-security.config.ts",
-    "test:review-followups": "playwright test --config playwright.review-followups.config.ts"
+    "test:review-followups": "playwright test --config playwright.review-followups.config.ts",
+    "test:profile": "playwright test --config playwright.profile.config.ts",
+    "test:header-sidebar": "playwright test --config playwright.header-sidebar.config.ts"
   },
   "dependencies": {
     "@emoji-mart/data": "1.2.1",

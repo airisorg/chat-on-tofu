@@ -353,6 +353,7 @@ async function authenticatedFixture(page: Page, context: BrowserContext, configu
     if (new URL(request.url()).pathname === '/api/chat' && request.method() === 'GET') fixture.failedGetRequests.push(request.failure()?.errorText || 'failed');
   });
   await page.goto(baseURL);
+  await page.getByRole('button', { name: /Reliability workspace/ }).first().click();
   await expect(page.getByRole('main').getByRole('heading', { name: 'Reliability workspace', exact: true })).toBeVisible();
   await expect(page.getByRole('main').getByRole('article').filter({ hasText: 'Initial workspace content stays available.' })).toBeVisible();
   await expect(page.getByText('DEMO WORKSPACE', { exact: true })).toHaveCount(0);
