@@ -13,7 +13,13 @@ function state(s:ReturnType<typeof session>):ChatState{const user={id:s.user.id,
 async function fixture(context:BrowserContext){await context.route('**/*',async route=>{const request=route.request(),url=new URL(request.url());if(url.origin===provider&&url.pathname==='/auth/v1/user')return route.fulfill({json:request.headers().authorization===`Bearer ${b.access_token}`?b.user:a.user});if(url.origin!==origin)return route.abort('blockedbyclient');if(url.pathname==='/api/config')return route.fulfill({json:{supabaseUrl:provider,supabaseAnonKey:'sb_publishable_LOCAL_ONLY',databaseConfigured:true}});if(url.pathname==='/api/chat')return route.fulfill({json:{state:state(request.headers().authorization===`Bearer ${b.access_token}`?b:a)}});return route.continue();});}
 const fragment=(s=a)=>new URLSearchParams({access_token:s.access_token,refresh_token:s.refresh_token,expires_in:'3600',token_type:'bearer'}).toString();
 async function seeded(context:BrowserContext,s=a){await context.addInitScript(value=>{if(!localStorage.getItem('relay-chat-auth-v1'))localStorage.setItem('relay-chat-auth-v1',JSON.stringify(value));},s);}
-async function heading(page:Page,name='First workspace'){await expect(page.getByRole('main').getByRole('heading',{name,exact:true})).toBeVisible();}
+async function heading(page:Page,name='First workspace'){
+  const conversation=page.getByRole('main').getByRole('heading',{name,exact:true});
+  // Authenticated startup opens Home. Enter the seeded workspace explicitly;
+  // the security assertions below must execute on its actual conversation.
+  if(!await conversation.isVisible())await page.locator('.sidebar-conversation').filter({hasText:name}).click();
+  await expect(conversation).toBeVisible();
+}
 async function holdFile(page:Page){await page.evaluate(()=>{const Original=FileReader;(window as any).securityReleases=[];(window as any).securityPending=0;window.FileReader=class extends Original{readAsDataURL(blob:Blob){(window as any).securityPending++;(window as any).securityReleases.push(()=>super.readAsDataURL(blob));}abort(){if(this.readyState===FileReader.EMPTY){this.onabort?.(new ProgressEvent('abort') as any);}else super.abort();}};});}
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
 const picked=(name:string)=>({name,mimeType:'image/png',buffer:png});

@@ -26,7 +26,11 @@
     "test:frontend-security": "playwright test --config playwright.frontend-security.config.ts",
     "test:review-followups": "playwright test --config playwright.review-followups.config.ts",
     "test:profile": "playwright test --config playwright.profile.config.ts",
-    "test:header-sidebar": "playwright test --config playwright.header-sidebar.config.ts"
+    "test:header-sidebar": "playwright test --config playwright.header-sidebar.config.ts",
+    "test:dialog-visual": "playwright test --config playwright.dialog-visual.config.ts",
+    "test:home-toolbar": "playwright test --config playwright.home-toolbar.config.ts",
+    "test:browser:list": "tsx scripts/test-browser-suites.ts --list",
+    "test:browser:all": "tsx scripts/test-browser-suites.ts"
   },
   "dependencies": {
     "@emoji-mart/data": "1.2.1",

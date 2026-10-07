@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { useMessageToolbarPosition } from "./useMessageToolbarPosition";
 import {
   useCallback,
   useEffect,
@@ -1335,6 +1336,7 @@ export default function ChatApp() {
   function showMessage(message: Message) {
     setModal({ type: "message", message });
   }
+  const positionMessageToolbar = useMessageToolbarPosition();
   function messageRow(message: Message, compact = false, idPrefix = "", presentation: "standard" | "dm" = "standard") {
     const ownDm = presentation === "dm" && message.author.id === state?.user.id;
     const count =
@@ -1344,6 +1346,8 @@ export default function ChatApp() {
         id={`${idPrefix}message-${message.id}`}
         className={`message ${jumpTarget === message.id ? "message-highlight" : ""} ${compact ? "compact-message" : ""} ${presentation === "dm" ? "dm-message" : ""} ${ownDm ? "dm-own" : ""}`}
         key={message.id}
+        onMouseEnter={(event) => positionMessageToolbar(event.currentTarget)}
+        onFocusCapture={(event) => positionMessageToolbar(event.currentTarget)}
       >
         {!ownDm && <Avatar person={message.author} />}
         <div className="message-body">

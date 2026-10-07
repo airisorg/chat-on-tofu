@@ -11,3 +11,5 @@ Visual regression baselines under `tests/visual-regression.spec.ts-snapshots/` s
 Keep changes focused, preserve account isolation and stable retry identities, and describe the checks run in your pull request. Do not include populated environment files, credentials, production messages, personal screenshots, or recordings. Bundled fonts, icons and emoji data retain their separate license notices. This project is independent of Google; new features must describe what this app actually supports.
 
 For a suspected credential or private-data issue, use GitHub's private vulnerability reporting when available; do not post credentials or private account data in a public issue.
+
+See [the complete browser inventory and screenshot review process](docs/testing.md) for the two-server aggregate command, non-vacuous geometry checks, source binding and evidence boundaries.

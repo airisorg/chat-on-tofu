@@ -47,7 +47,13 @@ for (const theme of ["light", "dark"] as const) {
     const title = await dialog.getByRole("heading").evaluate(node => ({ size: parseFloat(getComputedStyle(node).fontSize), weight: getComputedStyle(node).fontWeight }));
     expect(title.size).toBe(22);
     expect(title.weight).toBe("400");
+    await expect(dialog.locator(".setting-row")).toHaveCount(4);
+    await expect(dialog.locator(".setting-row strong")).toHaveText([
+      "Appearance", "Save drafts on this device", "Home Screen app", "Chat",
+    ]);
+    await expect(dialog.locator(".setting-row small")).toHaveCount(4);
     const typography = await dialog.locator(".setting-row strong,.setting-row small").evaluateAll(nodes => nodes.map(node => ({ secondary: node.matches("small"), size: parseFloat(getComputedStyle(node).fontSize), line: parseFloat(getComputedStyle(node).lineHeight) })));
+    expect(typography).toHaveLength(8);
     for (const text of typography) {
       expect(text.size).toBeGreaterThanOrEqual(text.secondary ? 12 : 14);
       expect(text.line).toBeGreaterThanOrEqual(text.secondary ? 16 : 20);
@@ -57,6 +63,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect(page.locator("html")).toHaveAttribute("data-theme", theme === "light" ? "dark" : "light");
     await select.selectOption(theme);
     const edges = await dialog.locator(".setting-row > span").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().left));
+    expect(edges).toHaveLength(4);
     expect(Math.max(...edges) - Math.min(...edges)).toBeLessThanOrEqual(1);
     if (info.project.name === "Chrome") await dialog.screenshot({ path: proofPath(info, `settings-spacing-${theme}-browser-test.png`) });
     await page.keyboard.press("Escape");
@@ -99,10 +106,18 @@ test("settings preserve touch targets, input sizing and bounded text", async ({ 
   await page.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name: "More", exact: true }).click();
   await page.getByRole("dialog", { name: "More in Chat", exact: true }).getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Settings", exact: true });
+  await expect(dialog.locator(".setting-row")).toHaveCount(4);
+  await expect(dialog.locator(".setting-row strong")).toHaveText([
+    "Appearance", "Save drafts on this device", "Home Screen app", "Chat",
+  ]);
+  await expect(dialog.locator(".setting-row small")).toHaveCount(4);
   const select = dialog.getByRole("combobox", { name: "Appearance" });
   expect((await select.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   expect(await select.evaluate(node => parseFloat(getComputedStyle(node).fontSize))).toBeGreaterThanOrEqual(16);
-  for (const control of await dialog.getByRole("button").all()) {
+  const buttons = dialog.getByRole("button");
+  await expect(buttons).toHaveCount(2); // Close and Install; the draft control has role=switch.
+  await expect(dialog.getByRole("switch", { name: "Save drafts on this device" })).toBeVisible();
+  for (const control of [...await buttons.all(), dialog.getByRole("switch", { name: "Save drafts on this device" })]) {
     const rect = await control.boundingBox();
     expect(rect!.height).toBeGreaterThanOrEqual(44);
   }
@@ -112,6 +127,7 @@ test("settings preserve touch targets, input sizing and bounded text", async ({ 
   expect(box!.y + box!.height).toBeLessThanOrEqual(844);
   expect(await dialog.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
   const secondary = await dialog.locator(".setting-row small").evaluateAll(nodes => nodes.map(node => parseFloat(getComputedStyle(node).fontSize)));
+  expect(secondary).toHaveLength(4);
   expect(Math.min(...secondary)).toBeGreaterThanOrEqual(12);
   if (info.project.name === "Chrome") await dialog.screenshot({ path: proofPath(info, "iphone-dark-settings-spacing-browser-test.png") });
 });

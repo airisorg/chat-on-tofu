@@ -13,11 +13,16 @@ const miniInput = (page: Page, name?: string) => panel(page, name).getByRole('te
 const mainInput = (page: Page) => main(page).getByRole('textbox', { name: 'Message', exact: true });
 const mainMessage = (page: Page, text: string) => main(page).getByRole('article').filter({ has: page.locator('.message-text').filter({ hasText: text }) });
 
+async function conversation(page: Page, name: string) {
+  await page.getByRole('complementary').getByRole('button', { name, exact: true }).click();
+  await expect(main(page).getByRole('heading', { name, exact: true })).toBeVisible();
+}
+
 async function demo(page: Page) {
   await page.route('**/api/config', route => route.fulfill({ json: { supabaseUrl: '', supabaseAnonKey: '', databaseConfigured: false } }));
   await page.goto('/');
   await page.getByRole('button', { name: 'Explore demo', exact: true }).click();
-  await expect(main(page).getByRole('heading', { name: 'Design team', exact: true })).toBeVisible();
+  await conversation(page, 'Design team');
 }
 async function open(page: Page, name = 'Design team') {
   await main(page).getByRole('button', { name: 'Open in a pop-up', exact: true }).click();
@@ -153,6 +158,7 @@ test('leaving demo closes the pop-up and clears its identity-scoped draft', asyn
   await expect(panel(page)).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Explore demo', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Explore demo', exact: true }).click();
+  await conversation(page, 'Design team');
   await open(page);
   await expect(miniInput(page)).toHaveValue('');
 });
@@ -283,7 +289,7 @@ async function authenticated(page: Page, context: BrowserContext, baseURL: strin
     try { return await route.fulfill({ json: { state: fixture.state, id } }); } catch { /* A locally aborted pending request has no remote side effect. */ }
   });
   await page.goto(baseURL);
-  await expect(main(page).getByRole('heading', { name: 'Mini local workspace', exact: true })).toBeVisible();
+  await conversation(page, 'Mini local workspace');
   return fixture;
 }
 

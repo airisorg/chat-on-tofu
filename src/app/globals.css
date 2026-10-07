@@ -937,7 +937,7 @@ button:hover {
   position: absolute;
   /* A31px control plus6px padding and2px border makes a39px toolbar.
      End it1px before the normal metadata starts8px into the row. */
-  top: -32px;
+  top: var(--message-actions-top, -32px);
   right: 12px;
   display: flex;
   gap: 1px;
@@ -4055,7 +4055,9 @@ button:hover {
   }
   .home-view:has(> .home-filter-tabs) {
     display: grid;
-    grid-template-columns: 210px minmax(0, 1fr);
+    /* The title, Unread state and split toggle must reserve their actual width.
+       A fixed column lets these controls overlap the adjacent All filter. */
+    grid-template-columns: max-content minmax(0, 1fr);
     grid-template-rows: 64px minmax(0, 1fr);
   }
   .home-header {

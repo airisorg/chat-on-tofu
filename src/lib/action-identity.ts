@@ -35,10 +35,13 @@ export class PendingActionIds {
     this.revision++;
     this.ids.clear();
     this.identity = identity;
+    // Storage can remain readable after quota or policy denies writes. Marker
+    // cleanup must not prevent restoring this verified owner's existing IDs.
+    let previous: string | null | undefined;
+    try { previous = this.storage?.getItem(this.identityKey); } catch {}
+    if (previous && previous !== identity) try { this.storage?.removeItem(this.prefix + previous); } catch {}
+    try { this.storage?.setItem(this.identityKey, identity); } catch {}
     try {
-      const previous = this.storage?.getItem(this.identityKey);
-      if (previous && previous !== identity) this.storage?.removeItem(this.prefix + previous);
-      this.storage?.setItem(this.identityKey, identity);
       const raw = this.storage?.getItem(this.prefix + identity);
       if (!raw || raw.length > 18000) return;
       const saved = JSON.parse(raw) as { entries?: unknown };

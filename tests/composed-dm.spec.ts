@@ -12,7 +12,7 @@ const target = (page: Page) => page.getByRole('main').locator('#message-composed
 const peer = (page: Page) => page.getByRole('main').locator('#message-composed-peer');
 const editedBody = 'Edited together with a star, eight reactions and three files.\n' + 'LongText'.repeat(50);
 
-async function openFixture(page: Page, theme: 'light' | 'dark') {
+async function openFixture(page: Page, theme: 'light' | 'dark', toolbarStress = false) {
   const state = createDemoState();
   const conversation = state.conversations.find(c => c.id === 'demo-maya-dm')!;
   const other = { ...conversation.members[1], name: 'W'.repeat(80) };
@@ -29,6 +29,16 @@ async function openFixture(page: Page, theme: 'light' | 'dark') {
       { name: 'composed-voice.m4a', type: 'audio/mp4', size: audio.length, url: 'data:audio/mp4;base64,' + audio.toString('base64') },
     ] },
   );
+  if (toolbarStress) {
+    state.messages.find(message => message.id === 'composed-peer')!.text = Array(4).fill('Continue previous text to remain visible '.repeat(3).trim()).join('\n');
+    // Later rows allow a real older-reading scroll position. They are distinct
+    // authors so the target never becomes an intentionally compact continuation.
+    for (let index = 0; index < 20; index++) state.messages.push({
+      id: `toolbar-following-${index}`, conversationId: conversation.id,
+      author: index % 2 ? other : state.user, text: `Following history ${index}`,
+      createdAt: new Date(Date.parse('2026-10-06T12:03:00Z') + index * 60000).toISOString(), reactions: [], attachments: [],
+    });
+  }
   await page.emulateMedia({ colorScheme: theme });
   await page.addInitScript(({ key, state }) => {
     localStorage.setItem(key, JSON.stringify(state));
@@ -212,4 +222,83 @@ for (const width of [390, 1440]) for (const theme of ['light', 'dark'] as const)
       expect(await peer(page).locator('.message-text').evaluate(node=>{const r=node.getBoundingClientRect();return node.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));})).toBe(true);
     }
   });
+});
+
+test.describe('desktop toolbar scroll boundaries', () => {
+  test.use({ viewport: { width: 1440, height: 960 }, hasTouch: false, isMobile: false });
+  for (const position of ['partially visible row', 'preceding row'] as const) {
+    test(position === 'partially visible row'
+      ? 'hover actions on a partially visible row remain inside the scroll viewport'
+      : 'floating actions remain usable and release preceding text when dismissed', async ({ page }, info) => {
+      await openFixture(page, 'light', true);
+      const history = page.getByRole('main').locator('.messages-scroll');
+      const own = target(page);
+      if (position === 'partially visible row') {
+        await own.evaluate(node => {
+          const scroller = node.closest('.messages-scroll')!;
+          const targetTop = node.getBoundingClientRect().top;
+          scroller.scrollTop += targetTop - scroller.getBoundingClientRect().top - 12;
+        });
+      } else {
+        await peer(page).evaluate(node => {
+          const scroller = node.closest('.messages-scroll')!;
+          scroller.scrollTop += node.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 40;
+        });
+      }
+      const row = (await own.boundingBox())!, viewport = (await history.boundingBox())!;
+      const scrollBefore = await history.evaluate(node => node.scrollTop);
+      // Playwright locator.hover/click/element screenshot can scroll a clipped
+      // target into view. Move the physical pointer to an already visible point.
+      await page.mouse.move(row.x + 20, Math.max(row.y + 15, viewport.y + 20));
+      await expect(own.locator('.message-actions')).toHaveCSS('opacity', '1');
+      expect(await history.evaluate(node => node.scrollTop), 'hover must preserve the original older-reading scroll position').toBe(scrollBefore);
+      expect((await own.boundingBox())!.height, 'hover positioning must not change the message row height').toBe(row.height);
+      const toolbar = (await own.locator('.message-actions').boundingBox())!;
+      const preceding = await peer(page).locator('.message-text').boundingBox();
+      const textLines = await peer(page).locator('.message-text').evaluate(node => {
+        const range = document.createRange(); range.selectNodeContents(node);
+        return [...range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0).map(rect => ({ x: rect.x, y: rect.y, right: rect.right, bottom: rect.bottom }));
+      });
+      expect(textLines.length, 'the previous row must contain real text line rectangles').toBeGreaterThan(0);
+      const lineHits = await peer(page).locator('.message-text').evaluate((node, toolbar) => {
+        const range = document.createRange(); range.selectNodeContents(node);
+        return [...range.getClientRects()].filter(r => r.width > 0 && r.height > 0 && r.x < toolbar.x + toolbar.width && toolbar.x < r.right && r.y < toolbar.y + toolbar.height && toolbar.y < r.bottom).map(r => {
+          const x = (Math.max(r.x, toolbar.x) + Math.min(r.right, toolbar.x + toolbar.width)) / 2;
+          const y = (Math.max(r.y, toolbar.y) + Math.min(r.bottom, toolbar.y + toolbar.height)) / 2;
+          return { x, y, hit: node.contains(document.elementFromPoint(x, y)) };
+        });
+      }, toolbar);
+      const data = { position, viewport, row, toolbar, preceding, textLines, lineHits, scrollBefore };
+      const directory = evidenceDirectory(info, info.project.name); mkdirSync(directory, { recursive: true });
+      writeFileSync(resolve(directory, `toolbar-${position.replaceAll(' ', '-')}.json`), JSON.stringify(data, null, 2) + '\n');
+      await page.screenshot({ path: resolve(directory, `toolbar-${position.replaceAll(' ', '-')}.png`) });
+      expect(toolbar.y, 'visible row actions must not be clipped by the history viewport').toBeGreaterThanOrEqual(viewport.y);
+      expect(toolbar.y + toolbar.height).toBeLessThanOrEqual(viewport.y + viewport.height);
+      if (position === 'preceding row') {
+        // The Google-like toolbar intentionally floats above its own row. The
+        // prior zero-intersection proposal was not a proven reference contract;
+        // preserve that overlap here and check usable actions and restoration.
+        expect(lineHits.length, 'exercise an actual preceding glyph-line intersection, not empty bubble padding').toBeGreaterThan(0);
+      }
+      const button = own.getByRole('button', { name: 'More actions', exact: true });
+      const hit = await button.evaluate(node => { const r = node.getBoundingClientRect(); return node.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); });
+      expect(hit, 'More center hits its actual control without automatic scrolling').toBe(true);
+      const box = (await button.boundingBox())!;
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      await expect(page.getByRole('dialog', { name: 'Message actions', exact: true })).toBeVisible();
+      expect(await history.evaluate(node => node.scrollTop)).toBe(scrollBefore);
+      expect((await own.boundingBox())!.height).toBe(row.height);
+      if (position === 'preceding row') {
+        await page.getByRole('textbox', { name: 'Search in chat', exact: true }).focus();
+        await page.getByRole('banner').hover();
+        await expect(page.getByRole('dialog', { name: 'Message actions', exact: true })).toHaveCount(0);
+        await expect(own.locator('.message-actions')).toHaveCSS('opacity', '0');
+        const restored = await peer(page).locator('.message-text').evaluate((node, points) => points.map(({ x, y }) => node.contains(document.elementFromPoint(x, y))), lineHits);
+        expect(restored).toHaveLength(lineHits.length);
+        for (const hit of restored) expect(hit, 'previous text becomes hit-testable after floating actions dismiss').toBe(true);
+        expect(await history.evaluate(node => node.scrollTop)).toBe(scrollBefore);
+        expect((await own.boundingBox())!.height).toBe(row.height);
+      }
+    });
+  }
 });

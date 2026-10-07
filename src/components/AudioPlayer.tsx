@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ArrowDownToLine, LoaderCircle, Pause, Play } from "lucide-react";
+import { audioDataUrlBytes } from "@/lib/audio-bytes";
 import styles from "./AudioPlayer.module.css";
 
 const timestamp = (seconds: number) =>
@@ -75,9 +76,17 @@ export default function AudioPlayer({
     const timeout = setTimeout(() => controller.abort(), 8000);
     void (async () => {
       try {
-        const response = await fetch(src, { signal: controller.signal });
-        if (!response.ok) return;
-        const bytes = await response.arrayBuffer();
+        let bytes: ArrayBuffer;
+        if (src.startsWith("data:")) {
+          // Local draft/demo bytes need no external connection permission.
+          const local = audioDataUrlBytes(src);
+          if (!local) return;
+          bytes = local;
+        } else {
+          const response = await fetch(src, { signal: controller.signal });
+          if (!response.ok) return;
+          bytes = await response.arrayBuffer();
+        }
         if (cancelled || bytes.byteLength > 5 * 1024 * 1024) return;
         const context = new OfflineAudioContext(1, 1, 22050);
         const decoded = await context.decodeAudioData(bytes);

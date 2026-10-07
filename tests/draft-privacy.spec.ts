@@ -38,9 +38,15 @@ async function fixture(context: BrowserContext) {
 }
 const main = (page: Page) => page.getByRole('main');
 const input = (page: Page) => main(page).getByRole('textbox', { name: 'Message', exact: true });
+async function workspace(page: Page, name = 'First workspace') {
+  // Account changes and reloads open Home. Enter this fixture's conversation
+  // explicitly before exercising its draft privacy and storage assertions.
+  await page.getByRole('complementary').getByRole('button', { name, exact: true }).click();
+  await expect(main(page).getByRole('heading', { name, exact: true })).toBeVisible();
+}
 async function opened(page: Page, name = 'First workspace') {
   await page.goto(base);
-  await expect(main(page).getByRole('heading', { name, exact: true })).toBeVisible();
+  await workspace(page, name);
 }
 async function settings(page: Page) {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
@@ -52,7 +58,7 @@ async function switchAccount(context: BrowserContext, s: typeof a) {
   await tab.addInitScript(({ key, nonce }) => sessionStorage.setItem(key, JSON.stringify({ nonce, createdAt: Date.now() })), { key: LOGIN_REQUEST_KEY, nonce });
   const hash = new URLSearchParams({ access_token: s.access_token, refresh_token: s.refresh_token, expires_in: '3600', token_type: 'bearer' });
   await tab.goto(`${base}/?${LOGIN_NONCE_QUERY}=${nonce}#${hash}`);
-  await expect(main(tab).getByRole('heading', { name: s.user.id === first ? 'First workspace' : 'Second workspace', exact: true })).toBeVisible();
+  await workspace(tab, s.user.id === first ? 'First workspace' : 'Second workspace');
   return tab;
 }
 
@@ -82,6 +88,7 @@ test('opting out keeps current text/files and retry identity, removes saved copi
   await expect(input(page)).toHaveValue('Private draft remains in this visit');
   expect(await stored(page, savedDraftsKey(first))).toBeNull();
   await page.reload();
+  await workspace(page);
   await expect(input(page)).toHaveValue('');
   await expect(main(page).locator('.draft-attachments')).toHaveCount(0);
   expect(await stored(page, retryKey)).toBe(retry);
@@ -106,6 +113,7 @@ test('opting back in saves the current draft, while stale saved copies are never
   await expect(toggle).toHaveAttribute('aria-checked', 'true');
   await expect.poll(async () => JSON.parse(await stored(page, savedDraftsKey(first)) || '{}')[cid]?.text).toBe('New draft explicitly chosen for saving');
   await page.reload();
+  await workspace(page);
   await expect(input(page)).toHaveValue('New draft explicitly chosen for saving');
 });
 
@@ -136,14 +144,14 @@ test('draft-saving choices stay account-scoped across actual SDK identity transi
   await page.keyboard.press('Escape');
   await input(page).fill('First account private unsaved text');
   const secondTab = await switchAccount(context, b);
-  await expect(main(page).getByRole('heading', { name: 'Second workspace', exact: true })).toBeVisible();
+  await workspace(page, 'Second workspace');
   await expect(await settings(page)).toHaveAttribute('aria-checked', 'true');
   await page.keyboard.press('Escape');
   await expect(input(page)).toHaveValue('');
   await input(page).fill('Second account’s own saved draft');
   await expect.poll(async () => JSON.parse(await stored(page, savedDraftsKey(second)) || '{}')[cid]?.text).toBe('Second account’s own saved draft');
   const returnTab = await switchAccount(context, a);
-  await expect(main(page).getByRole('heading', { name: 'First workspace', exact: true })).toBeVisible();
+  await workspace(page);
   await expect(await settings(page)).toHaveAttribute('aria-checked', 'false');
   await page.keyboard.press('Escape');
   await expect(input(page)).toHaveValue('');
@@ -168,6 +176,7 @@ test('failed saved-copy removal is disclosed without clearing the active draft o
   await page.keyboard.press('Escape');
   await expect(input(page)).toHaveValue('Private draft kept while clearing fails');
   await page.reload();
+  await workspace(page);
   await expect(input(page)).toHaveValue('');
   await expect(await settings(page)).toHaveAttribute('aria-checked', 'false');
 });

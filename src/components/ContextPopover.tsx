@@ -26,6 +26,7 @@ export default function ContextPopover({
   hideHeader?: boolean;
 }) {
   const panel = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
   const restoreFocus = useRef(true);
   const [position, setPosition] = useState<{
     left: number;
@@ -33,6 +34,7 @@ export default function ContextPopover({
     maxHeight: number;
   } | null>(null);
   const positioned = position !== null;
+  useLayoutEffect(() => { close.current = onClose; }, [onClose]);
   useLayoutEffect(() => {
     const place = () => {
       const element = panel.current;
@@ -69,7 +71,8 @@ export default function ContextPopover({
           topEdge + height - panelHeight - 12,
         ),
       );
-      setPosition({ left, top, maxHeight });
+      setPosition(previous => previous?.left === left && previous.top === top && previous.maxHeight === maxHeight
+        ? previous : { left, top, maxHeight });
     };
     place();
     window.addEventListener("resize", place);
@@ -77,7 +80,23 @@ export default function ContextPopover({
     window.visualViewport?.addEventListener("scroll", place);
     const observer = new ResizeObserver(place);
     if (panel.current) observer.observe(panel.current);
+    // An image, edited message or font can move an opener without resizing it
+    // or the panel. Track just this open anchor, and only place on a change.
+    let frame = 0;
+    let previousAnchor = anchor?.getBoundingClientRect();
+    const followAnchor = () => {
+      if (!anchor) return;
+      if (!anchor.isConnected) { close.current(); return; }
+      const rect = anchor.getBoundingClientRect();
+      if (!previousAnchor || rect.x !== previousAnchor.x || rect.y !== previousAnchor.y || rect.width !== previousAnchor.width || rect.height !== previousAnchor.height) {
+        previousAnchor = rect;
+        place();
+      }
+      frame = window.requestAnimationFrame(followAnchor);
+    };
+    if (anchor) frame = window.requestAnimationFrame(followAnchor);
     return () => {
+      window.cancelAnimationFrame(frame);
       observer.disconnect();
       window.removeEventListener("resize", place);
       window.visualViewport?.removeEventListener("resize", place);

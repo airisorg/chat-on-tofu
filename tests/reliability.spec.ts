@@ -353,8 +353,7 @@ async function authenticatedFixture(page: Page, context: BrowserContext, configu
     if (new URL(request.url()).pathname === '/api/chat' && request.method() === 'GET') fixture.failedGetRequests.push(request.failure()?.errorText || 'failed');
   });
   await page.goto(baseURL);
-  await page.getByRole('button', { name: /Reliability workspace/ }).first().click();
-  await expect(page.getByRole('main').getByRole('heading', { name: 'Reliability workspace', exact: true })).toBeVisible();
+  await openWorkspace(page);
   await expect(page.getByRole('main').getByRole('article').filter({ hasText: 'Initial workspace content stays available.' })).toBeVisible();
   await expect(page.getByText('DEMO WORKSPACE', { exact: true })).toHaveCount(0);
   return fixture;
@@ -362,6 +361,11 @@ async function authenticatedFixture(page: Page, context: BrowserContext, configu
 
 async function triggerSync(page: Page) {
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
+}
+
+async function openWorkspace(page: Page) {
+  await page.getByRole('complementary', { name: 'Chat navigation' }).getByRole('button', { name: 'Reliability workspace', exact: true }).click();
+  await expect(page.getByRole('main').getByRole('heading', { name: 'Reliability workspace', exact: true })).toBeVisible();
 }
 
 async function expectAccountRetained(page: Page) {
@@ -536,6 +540,7 @@ test('lost committed POST response reconciles the unchanged restored draft from 
     expect(fixture.sends).toHaveLength(1);
     await expect(main.locator(`#message-${originalId}`)).toHaveCount(0);
     fixture.releaseHeld();
+    await openWorkspace(page);
     await expectAccountRetained(page);
     await expect(main.locator(`#message-${originalId}`)).toHaveCount(1);
     await expect(main.locator(`#message-${originalId}`)).toContainText(text);
@@ -583,6 +588,7 @@ test('visible private media uses bearer fetch once per session and survives subs
   await expect(image).toHaveAttribute('src', source!);
   expect(fixture.mediaRequests).toBe(1);
   await page.reload();
+  await openWorkspace(page);
   await expect(image).toBeVisible();
   await expect.poll(() => image.evaluate(element => (element as HTMLImageElement).naturalWidth)).toBe(192);
   expect(fixture.mediaRequests, 'relaunch downloads through auth again; private binaries are never persisted').toBe(2);
@@ -658,6 +664,7 @@ test('a 5 MB image upload renders through protected binary download and reloads 
   expect(await image.getAttribute('src')).toMatch(/^blob:/);
   expect(fixture.mediaRequests).toBe(1);
   await page.reload();
+  await openWorkspace(page);
   await expect(image).toBeVisible();
   await expect.poll(() => image.evaluate(element => (element as HTMLImageElement).naturalWidth)).toBe(192);
   expect(fixture.mediaRequests).toBe(2);
@@ -1087,6 +1094,7 @@ test('uncommitted star failure retries the same action identity after reload wit
   const first = fixture.actions.find(action => action.type === 'star') as ChatAction & { clientActionId?: string };
   expect(first.clientActionId).toMatch(uuid);
   await page.reload();
+  await openWorkspace(page);
   await expectAccountRetained(page);
   await article().hover();
   await article().getByRole('button', { name: 'Star message', exact: true }).click();
@@ -1118,6 +1126,7 @@ test('committed star with lost ACK and failed receipt confirmation allows a dist
   expect(original.clientActionId).toMatch(uuid);
   expect(original.starred).toBe(true);
   await page.reload();
+  await openWorkspace(page);
   await expectAccountRetained(page);
   await article().hover();
   await expect(article().getByRole('button', { name: 'Unstar message', exact: true })).toBeVisible();
