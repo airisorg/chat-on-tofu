@@ -321,11 +321,13 @@ test('revoked refresh session clears private state and remains a guest on later 
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
   await expect.poll(async () => (await view(page)).name).toBeNull();
   await expect(page.locator('output')).toContainText('Your session expired.');
+  expect(await page.evaluate(() => window.lifecycleChat.state)).toBeNull();
   const before = gets;
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
   // Observe beyond several poll periods; an immediate count can miss an async
   // request incorrectly scheduled by the connectivity callback.
   await page.clock.runFor(10000);
   await expect.poll(() => view(page)).toMatchObject({ name: null, loading: false });
+  expect(await page.evaluate(() => window.lifecycleChat.state)).toBeNull();
   expect(gets).toBe(before);
 });
