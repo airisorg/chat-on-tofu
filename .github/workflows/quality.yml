@@ -44,7 +44,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      CHAT_NATIVE_WORK_DIR: ${{ runner.temp }}/relay-native
       CHAT_NATIVE_BUILD_BINDING: ${{ github.workspace }}/test-results/native-build-binding.json
       CHAT_NATIVE_PG_BIN: /usr/lib/postgresql/16/bin
       CHAT_NATIVE_OPENSSL: /usr/bin/openssl
@@ -90,6 +89,8 @@ jobs:
             },null,2));
           '
       - name: Exercise native concurrency and compiled HTTP routes
+        env:
+          CHAT_NATIVE_WORK_DIR: ${{ runner.temp }}/relay-native
         run: npm run test:native 2>&1 | tee test-results/native-ci.log
       # Never upload a fixture cluster, its private TLS keys or HTTP auth state.
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
