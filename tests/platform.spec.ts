@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Browser, type Locator } from '@playwright/test';
+import { expect, test, type Page, type Browser, type Locator } from './coverage-test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { deflateSync } from 'node:zlib';

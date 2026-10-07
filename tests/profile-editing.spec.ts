@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page } from './coverage-test';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { evidenceDirectory, localBaseUrl } from './browser-config';

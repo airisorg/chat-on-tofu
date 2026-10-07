@@ -7,6 +7,7 @@ import reactHooks from 'eslint-plugin-react-hooks';
 export default defineConfig([
   globalIgnores([
     '.next/**',
+    '.next-coverage/**',
     'node_modules/**',
     'test-results/**',
     'playwright-report/**',
@@ -25,6 +26,16 @@ export default defineConfig([
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_', ignoreRestSiblings: true },
       ],
     },
+  },
+  {
+    // Node --require and Webpack's synchronous loader API run before TS hooks.
+    files: [
+      'scripts/capture-node-coverage.cjs',
+      'scripts/coverage-instrumentation.cjs',
+      'scripts/coverage-webpack-loader.cjs',
+    ],
+    languageOptions: { sourceType: 'commonjs', globals: globals.node },
+    rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
   {
     files: ['src/**/*.{ts,tsx}'],

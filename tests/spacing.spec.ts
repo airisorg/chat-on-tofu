@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { expect, test, type Page, type TestInfo } from '@playwright/test';
+import { expect, test, type Page, type TestInfo } from './coverage-test';
 
 function proofPath(info: TestInfo, filename: string) {
   const directory = process.env.CHAT_EVIDENCE_DIR

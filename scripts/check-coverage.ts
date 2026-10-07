@@ -1,3 +1,16 @@
+import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+
+if (process.argv.includes('--combined')) {
+  const require = createRequire(import.meta.url);
+  const result = spawnSync(
+    process.execPath,
+    [require.resolve('tsx/cli'), 'scripts/merge-combined-coverage.ts', '--check'],
+    { stdio: 'inherit', env: process.env },
+  );
+  process.exit(result.status ?? 1);
+}
+
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, relative, sep } from 'node:path';
 

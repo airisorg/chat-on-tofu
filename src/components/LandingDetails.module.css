@@ -65,6 +65,21 @@
   line-height: 28px;
   color: var(--muted);
 }
+.previewLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  color: var(--blue);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+}
+.previewLink:hover {
+  background: var(--hover);
+}
 .cards,
 .steps {
   display: flex;

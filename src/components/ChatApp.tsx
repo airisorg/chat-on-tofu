@@ -77,6 +77,7 @@ import InstallHelp from './InstallHelp';
 import ProfileForm, { type ProfileValues } from './ProfileForm';
 import ContextPopover from './ContextPopover';
 import LandingDetails from './LandingDetails';
+import LandingChatPreview from './LandingChatPreview';
 import { MaterialHelp, MaterialSettings, MaterialNewChat } from './MaterialIcons';
 import MediaAttachment from './MediaAttachment';
 import MiniConversation, { type MiniDraft } from './MiniConversation';
@@ -310,6 +311,7 @@ function Dialog({
     const first = nodes().find((x) => x.tagName === 'INPUT') || nodes()[0];
     first?.focus();
     function key(event: globalThis.KeyboardEvent) {
+      if (event.defaultPrevented) return;
       if (event.key === 'Escape') onClose();
       if (event.key === 'Tab') {
         const elements = nodes();
@@ -1561,17 +1563,24 @@ export default function ChatApp() {
     await task;
   }
   async function copyInvitation(conversation: Conversation) {
+    const owner = state?.user.id;
+    const submittedModal = modal;
+    const isCurrent = () =>
+      modalContext.current.owner === owner && modalContext.current.modal === submittedModal;
     const url = `${location.origin}/?join=${encodeURIComponent(conversation.id)}`;
     try {
       await navigator.clipboard.writeText(url);
-      setToast(
-        'Invitation link copied. Share it with your friend and ask them to sign in with the email you added.',
-      );
+      if (isCurrent())
+        setToast(
+          'Invitation link copied. Share it with your friend and ask them to sign in with the email you added.',
+        );
     } catch {
-      setToast(`Invitation link: ${url}`);
+      if (isCurrent()) setToast(`Invitation link: ${url}`);
     }
   }
   async function shareInvitation(conversation: Conversation) {
+    const owner = state?.user.id;
+    const submittedModal = modal;
     if (!navigator.share) {
       await copyInvitation(conversation);
       return;
@@ -1583,7 +1592,11 @@ export default function ChatApp() {
         url: `${location.origin}/?join=${encodeURIComponent(conversation.id)}`,
       });
     } catch (error) {
-      if (!(error instanceof DOMException && error.name === 'AbortError'))
+      if (
+        modalContext.current.owner === owner &&
+        modalContext.current.modal === submittedModal &&
+        !(error instanceof DOMException && error.name === 'AbortError')
+      )
         await copyInvitation(conversation);
     }
   }
@@ -1917,67 +1930,7 @@ export default function ChatApp() {
               </button>
             </div>
           </div>
-          <div className="welcome-preview">
-            <div className="preview-top">
-              <span className="preview-dots">
-                <i />
-                <i />
-                <i />
-              </span>
-              <span>Design team</span>
-              <Ellipsis size={20} />
-            </div>
-            <div className="preview-space">
-              <span className="preview-space-icon">
-                <Hash size={27} />
-              </span>
-              <div>
-                <strong>A little space for big ideas.</strong>
-                <p>Keep the conversation going.</p>
-              </div>
-            </div>
-            <div className="preview-message">
-              <Avatar
-                person={{
-                  id: '',
-                  name: 'Maya Chen',
-                  email: '',
-                  color: '#ead7f8',
-                }}
-              />
-              <div>
-                <strong>
-                  Maya Chen <small>10:42 AM</small>
-                </strong>
-                <p>Love where this is going. Ready to share the first look? ✨</p>
-                <span className="preview-reaction">🙌 3</span>
-              </div>
-            </div>
-            <div className="preview-message">
-              <Avatar
-                person={{
-                  id: '',
-                  name: 'Alex Rivera',
-                  email: '',
-                  color: '#c4eed0',
-                }}
-              />
-              <div>
-                <strong>
-                  Alex Rivera <small>10:43 AM</small>
-                </strong>
-                <p>Absolutely. A fresh start for all of us.</p>
-              </div>
-            </div>
-            <div className="preview-composer">
-              Message Design team
-              <Smile size={20} />
-              <SendHorizontal size={20} />
-            </div>
-            <span className="preview-floating">
-              <Smartphone size={19} /> Your team, wherever you are
-            </span>
-          </div>
+          <LandingChatPreview />
         </section>
         <LandingDetails />
         <footer className="welcome-footer">Your conversations are private to this app.</footer>
@@ -2783,7 +2736,9 @@ export default function ChatApp() {
                   onClick={() => openConversation(c)}
                 >
                   <ConversationAvatar userId={state.user.id} conversation={c} small />
-                  <span>{c.name}</span>
+                  <span className={c.unread ? 'unread' : ''}>{c.name}</span>
+                  {c.pinned && <Pin size={13} />}
+                  {!!c.unread && <span className="unread-dot" />}
                 </button>
               ))}
           </div>

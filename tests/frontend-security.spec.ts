@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page } from './coverage-test';
 import type { ChatState } from '../src/lib/types';
 import { localBaseUrl } from './browser-config';
 import {

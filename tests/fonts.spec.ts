@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from './coverage-test';
 
 async function loadedFonts(page: Page) {
   await page.evaluate(() => document.fonts.ready);

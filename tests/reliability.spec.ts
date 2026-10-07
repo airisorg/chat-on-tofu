@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { expect, test, type BrowserContext, type Page, type Route } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page, type Route } from './coverage-test';
 import type { ChatAction, ChatState, Message, Person } from '../src/lib/types';
 import type { UploadChunk } from '../src/lib/server';
 

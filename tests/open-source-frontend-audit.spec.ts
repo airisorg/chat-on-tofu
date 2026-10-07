@@ -1,12 +1,47 @@
-import { expect, test, type Page } from '@playwright/test';
-import { build } from 'esbuild';
+import { expect, test, type Page } from './coverage-test';
+import { build, type Plugin } from 'esbuild';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { applyDemoAction, createDemoState, DEMO_STORAGE_KEY } from '../src/lib/demo';
 
 // These checks run on an isolated localhost checkout. The audio fixture bundles
 // the actual component rather than adding a test route to the production app.
 const main = (page: Page) => page.getByRole('main');
+function componentCoveragePlugins(): Plugin[] {
+  if (process.env.CHAT_COLLECT_COVERAGE !== '1') return [];
+  const runId = process.env.CHAT_COVERAGE_RUN_ID;
+  const manifest = JSON.parse(
+    readFileSync(resolve('test-results/combined-coverage/manifest.json'), 'utf8'),
+  ) as { runId: string; files: Record<string, { sha256: string }> };
+  if (!runId || manifest.runId !== runId)
+    throw new Error('Standalone component coverage must use the current bound manifest.');
+  const require = createRequire(resolve('package.json'));
+  const { instrument } = require('./scripts/coverage-instrumentation.cjs') as {
+    instrument(source: string, filename: string, runId: string): { code: string };
+  };
+  return [
+    {
+      name: 'bound-component-coverage',
+      setup(builder) {
+        builder.onLoad({ filter: /\.[jt]sx?$/ }, ({ path }) => {
+          const key = relative(process.cwd(), path).replaceAll('\\', '/');
+          const entry = manifest.files[key];
+          if (!entry) return null;
+          const source = readFileSync(path, 'utf8');
+          if (createHash('sha256').update(source).digest('hex') !== entry.sha256)
+            throw new Error(`Standalone component source drift: ${key}`);
+          return {
+            contents: instrument(source, path, runId).code,
+            loader: path.endsWith('.tsx') ? 'tsx' : path.endsWith('.ts') ? 'ts' : 'js',
+            resolveDir: dirname(path),
+          };
+        });
+      },
+    },
+  ];
+}
 async function demo(page: Page) {
   await page.route('**/api/config', (route) =>
     route.fulfill({ json: { supabaseUrl: '', supabaseAnonKey: '', databaseConfigured: false } }),
@@ -228,6 +263,7 @@ test('changing the audio source resets both the displayed and native playback sp
 }) => {
   const data = `data:audio/mp4;base64,${readFileSync(resolve('tests/fixtures/picker-tone.m4a')).toString('base64')}`;
   const built = await build({
+    plugins: componentCoveragePlugins(),
     stdin: {
       contents: `import React, {useState} from 'react'; import {createRoot} from 'react-dom/client'; import AudioPlayer from './src/components/AudioPlayer'; const replacement=URL.createObjectURL(new Blob([Uint8Array.from(atob(${JSON.stringify(data.split(',')[1])}), c=>c.charCodeAt(0))],{type:'audio/mp4'})); function Fixture(){const [second,setSecond]=useState(false);return <><button onClick={()=>setSecond(true)}>Replace audio source</button><AudioPlayer src={second?replacement:${JSON.stringify(data)}} name="Local tone" size={10000}/></>} createRoot(document.getElementById('root')).render(<Fixture/>);`,
       resolveDir: process.cwd(),

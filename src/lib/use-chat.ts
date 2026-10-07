@@ -29,6 +29,7 @@ type Config = { supabaseUrl: string; supabaseAnonKey: string; databaseConfigured
 type Mode = 'guest' | 'auth' | 'demo';
 const AUTH_STORAGE_KEY = 'relay-chat-auth-v1';
 const DEMO_CHOICE_KEY = 'relay-chat-demo-choice-v1';
+const BOOTSTRAP_ERROR = 'Unable to connect. Check your connection and refresh the page.';
 const DEMO_ALLOWED =
   process.env.NODE_ENV !== 'production' || process.env.NEXT_PUBLIC_ENABLE_DEMO === 'true';
 
@@ -623,6 +624,9 @@ export function useChat(): ChatController {
         }
         if (disposed) return;
         configRef.current = config;
+        // A recovered settings request clears only its own connection error;
+        // callback validation and account errors must remain visible.
+        setError((current) => (current === BOOTSTRAP_ERROR ? null : current));
         setAuthAvailable(valid);
         if (!valid) {
           initialized = true;
@@ -699,7 +703,7 @@ export function useChat(): ChatController {
       } catch (failure) {
         if (!disposed && !(failure instanceof Error && failure.name === 'AbortError')) {
           restoreDemo();
-          setError('Unable to connect. Check your connection and refresh the page.');
+          setError(BOOTSTRAP_ERROR);
           setLoading(false);
         }
       } finally {

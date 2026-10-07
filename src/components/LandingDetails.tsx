@@ -1,4 +1,5 @@
 import { MessageSquare, Image, Mic, Smartphone, Users, Search } from 'lucide-react';
+import { MAX_CONVERSATION_MEMBERS } from '../lib/chat-limits';
 import styles from './LandingDetails.module.css';
 
 export default function LandingDetails() {
@@ -15,9 +16,12 @@ export default function LandingDetails() {
           <span>KEEP EVERYONE CONNECTED</span>
           <h2>A place for every conversation.</h2>
           <p>
-            Talk one to one, bring a group together, or give your team a shared space. Threads and
-            reactions keep the conversation easy to follow.
+            Talk one to one, bring up to {MAX_CONVERSATION_MEMBERS} people together, or give your
+            team a shared space. Threads and reactions keep the conversation easy to follow.
           </p>
+          <a className={styles.previewLink} href="#chat-preview">
+            Try a quick conversation ↑
+          </a>
         </div>
         <div className={styles.cards}>
           <article>
@@ -32,8 +36,8 @@ export default function LandingDetails() {
             <Users />
             <h3>Bring your people</h3>
             <p>
-              Invite a friend by email and share the conversation link. They sign in with Google and
-              join with their invited email.
+              Add your friend’s email to a conversation, then share its link. They sign in with
+              Google using the email you added. Invitation emails aren’t sent automatically.
             </p>
           </article>
           <article>
@@ -98,8 +102,8 @@ export default function LandingDetails() {
             <b>3</b>
             <h3>Start talking</h3>
             <p>
-              Choose New chat, add their email, and share the invitation link. Messages sync while
-              the app is open and connected.
+              Choose New chat, add their email, and share the invitation link yourself. Messages
+              sync while the app is open and connected.
             </p>
           </article>
         </div>

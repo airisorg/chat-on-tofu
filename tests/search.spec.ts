@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from './coverage-test';
 import { createDemoState, DEMO_STORAGE_KEY } from '../src/lib/demo';
 import type { Message } from '../src/lib/types';
 import { isStoredDemoState } from '../src/lib/demo-storage';

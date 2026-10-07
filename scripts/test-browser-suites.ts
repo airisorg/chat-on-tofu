@@ -24,6 +24,9 @@ type ChildResult = {
 };
 type Executor = (suite: Suite, environment: NodeJS.ProcessEnv) => ChildResult;
 const SECURITY_CONFIG = 'playwright.security.config.ts';
+// Internal coverage catchall is invoked directly by its own orchestrator.
+// Including it here would hide orphan specs and duplicate every ordinary suite.
+const INTERNAL_CONFIGS = new Set(['playwright.coverage.config.ts']);
 const posix = (path: string) => path.split(sep).join('/');
 const patterns = (value: Pattern | Pattern[] | undefined): Pattern[] =>
   value === undefined ? [] : [value].flat();
@@ -89,7 +92,9 @@ function walk(directory: string): string[] {
     .flatMap((entry) => {
       if (
         entry.name.startsWith('.env') ||
-        ['node_modules', '.git', '.next', 'test-results', 'coverage'].includes(entry.name)
+        ['node_modules', '.git', '.next', '.next-coverage', 'test-results', 'coverage'].includes(
+          entry.name,
+        )
       )
         return [];
       const path = resolve(directory, entry.name);
@@ -162,7 +167,9 @@ export function mapSuite(root: string, config: string, loaded: Config, specs: st
 export async function inventory(root: string): Promise<{ suites: Suite[]; specs: string[] }> {
   const specs = specFiles(root);
   const configs = readdirSync(root)
-    .filter((name) => /^playwright(?:\.[\w-]+)?\.config\.ts$/.test(name))
+    .filter(
+      (name) => /^playwright(?:\.[\w-]+)?\.config\.ts$/.test(name) && !INTERNAL_CONFIGS.has(name),
+    )
     .sort();
   if (!specs.length || !configs.length)
     throw new Error('Browser inventory requires at least one config and one spec');

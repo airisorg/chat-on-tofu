@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './coverage-test';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createDemoState, DEMO_STORAGE_KEY } from '../src/lib/demo';

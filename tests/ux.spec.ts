@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from './coverage-test';
 import { localBaseUrl } from './browser-config';
 
 // Run against a server started by the parent task. These checks use only the

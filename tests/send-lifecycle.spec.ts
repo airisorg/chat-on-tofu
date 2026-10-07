@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { expect, test, type BrowserContext, type Page, type TestInfo } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page, type TestInfo } from './coverage-test';
 import type { ChatAction, ChatState } from '../src/lib/types';
 import type { UploadChunk } from '../src/lib/server';
 import { evidenceDirectory, localBaseUrl } from './browser-config';

@@ -91,10 +91,14 @@ test('recursive spec discovery is deterministic and maps nested/project scopes w
   }
 });
 
-test('inventory refuses orphan nested files before any execution', async () => {
+test('ordinary inventory ignores the internal coverage catchall and refuses orphan nested files before execution', async () => {
   const f = fixture();
   try {
     f.put('playwright.config.ts', 'export default {testDir:"tests",testMatch:"**/root.spec.ts"};');
+    f.put(
+      'playwright.coverage.config.ts',
+      'export default {testDir:"tests",testMatch:"**/*.spec.*"};',
+    );
     await assert.rejects(
       inventory(f.root),
       /missing a suite: tests\/nested\/child\.spec\.ts, tests\/nested\/variant\.spec\.tsx/,

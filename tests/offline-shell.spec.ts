@@ -1,5 +1,5 @@
 import { evidenceDirectory } from './browser-config';
-import { test, expect } from '@playwright/test';
+import { test, expect } from './coverage-test';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 

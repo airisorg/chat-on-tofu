@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from '@playwright/test';
+import { expect, test, type Locator } from './coverage-test';
 import { createDemoState, DEMO_STORAGE_KEY } from '../src/lib/demo';
 
 async function readable(controls: Locator) {

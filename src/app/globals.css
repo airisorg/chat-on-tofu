@@ -2247,137 +2247,6 @@ button:hover {
 .welcome-benefits svg {
   color: #198754;
 }
-.welcome-preview {
-  position: relative;
-  max-width: 530px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 24px;
-  box-shadow: 0 15px 65px #2d416713;
-  padding-bottom: 20px;
-  transform: none;
-}
-.preview-top {
-  padding: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 25px;
-  font-size: 11px;
-  color: var(--muted);
-  border-bottom: 1px solid var(--line);
-}
-.preview-top > span:nth-child(2) {
-  margin-right: auto;
-}
-.preview-dots {
-  display: flex;
-  gap: 5px;
-}
-.preview-dots i {
-  display: block;
-  width: 6px;
-  height: 6px;
-  background: #dce2e8;
-  border-radius: 50%;
-}
-.preview-space {
-  display: flex;
-  gap: 17px;
-  align-items: center;
-  padding: 29px 24px 28px;
-}
-.preview-space-icon {
-  width: 55px;
-  height: 55px;
-  border-radius: 16px;
-  background: #d3e3fd;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #2d5f9d;
-  flex-shrink: 0;
-}
-.preview-space strong {
-  font-size: 14px;
-  font-weight: 500;
-  letter-spacing: -0.25px;
-}
-.preview-space p {
-  font-size: 10px;
-  color: var(--muted);
-  margin-top: 8px;
-}
-.preview-message {
-  display: flex;
-  align-items: flex-start;
-  gap: 13px;
-  margin: 0 24px 26px;
-}
-.preview-message > .avatar {
-  width: 33px;
-  height: 33px;
-  font-size: 11px;
-}
-.preview-message strong {
-  display: block;
-  font-size: 11px;
-  font-weight: 600;
-  margin: 2px 0 8px;
-}
-.preview-message small {
-  font-size: 9px;
-  color: var(--muted);
-  font-weight: 400;
-  margin-left: 6px;
-}
-.preview-message p {
-  font-size: 11px;
-  line-height: 1.8;
-  color: #505764;
-  max-width: 335px;
-}
-.preview-reaction {
-  display: inline-block;
-  margin-top: 10px;
-  font-size: 11px;
-  background: var(--surface-soft);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 4px 9px;
-}
-.preview-composer {
-  margin: 34px 20px 0;
-  background: var(--surface-soft);
-  border-radius: 25px;
-  padding: 17px 20px;
-  display: flex;
-  gap: 17px;
-  align-items: center;
-  font-size: 11px;
-  color: #7a8494;
-}
-.preview-composer > svg:first-child {
-  margin-left: auto;
-}
-.preview-composer > svg:last-child {
-  color: #3565a2;
-}
-.preview-floating {
-  position: absolute;
-  bottom: -22px;
-  left: 48px;
-  background: #e5f1e8;
-  color: #3c6650;
-  border: 5px solid var(--shell);
-  border-radius: 22px;
-  padding: 11px 17px;
-  font-size: 10px;
-  display: flex;
-  gap: 9px;
-  align-items: center;
-  box-shadow: 0 4px 15px #3b5c4710;
-}
 .welcome-footer {
   font-size: 10px;
   text-align: center;
@@ -2536,26 +2405,6 @@ button:hover {
   }
   .welcome-copy > p {
     font-size: 12px;
-  }
-  .welcome-preview {
-    padding-bottom: 12px;
-  }
-  .preview-space {
-    padding: 24px 17px;
-  }
-  .preview-message {
-    margin-left: 17px;
-    margin-right: 17px;
-  }
-  .preview-top {
-    gap: 14px;
-  }
-  .preview-message p {
-    font-size: 10px;
-  }
-  .preview-floating {
-    left: 20px;
-    font-size: 9px;
   }
 }
 @media (max-width: 799px), (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
@@ -3310,75 +3159,6 @@ button:hover {
     width: 14px;
     height: 14px;
   }
-  .welcome-preview {
-    width: 100%;
-    max-width: 420px;
-    transform: rotate(-0.5deg);
-    border-radius: 21px;
-    padding-bottom: 16px;
-  }
-  .preview-top {
-    padding: 17px;
-  }
-  .preview-space {
-    padding: 25px 18px 27px;
-    gap: 13px;
-  }
-  .preview-space-icon {
-    width: 47px;
-    height: 47px;
-    border-radius: 14px;
-  }
-  .preview-space strong {
-    font-size: 13px;
-  }
-  .preview-space p {
-    font-size: 10px;
-  }
-  .preview-message {
-    gap: 10px;
-    margin-bottom: 24px;
-    margin-left: 18px;
-    margin-right: 18px;
-  }
-  .preview-message p {
-    font-size: 13px;
-    line-height: 1.8;
-  }
-  .preview-message strong {
-    font-size: 12px;
-  }
-  .preview-message small {
-    font-size: 10px;
-    margin-left: 4px;
-  }
-  .preview-message > .avatar {
-    width: 29px;
-    height: 29px;
-    font-size: 10px;
-  }
-  .preview-composer {
-    margin: 27px 14px 0;
-    padding: 15px 17px;
-    font-size: 10px;
-    gap: 12px;
-  }
-  .preview-composer svg {
-    width: 18px;
-    height: 18px;
-  }
-  .preview-floating {
-    left: 22px;
-    bottom: -21px;
-    font-size: 9px;
-    padding: 9px 13px;
-    border-width: 4px;
-    gap: 8px;
-  }
-  .preview-floating svg {
-    width: 16px;
-    height: 16px;
-  }
   .welcome-footer {
     padding: 13px 30px 24px;
     font-size: 12px;
@@ -3433,9 +3213,6 @@ button:hover {
   .welcome-benefits {
     font-size: 12px;
     gap: 9px;
-  }
-  .preview-space strong {
-    font-size: 12px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -3743,9 +3520,7 @@ button:hover {
 }
 :root[data-theme='dark'] .conversation-header-actions .icon-button,
 :root[data-theme='dark'] .composer-controls > .icon-button,
-:root[data-theme='dark'] .mobile-tabs > button,
-:root[data-theme='dark'] .preview-message p,
-:root[data-theme='dark'] .preview-composer {
+:root[data-theme='dark'] .mobile-tabs > button {
   color: var(--muted);
 }
 :root[data-theme='dark'] .demo-badge {
@@ -3764,8 +3539,7 @@ button:hover {
 :root[data-theme='dark'] .welcome-benefits > span > svg {
   color: var(--green);
 }
-:root[data-theme='dark'] .welcome-benefits > button > svg,
-:root[data-theme='dark'] .preview-composer > svg:last-child {
+:root[data-theme='dark'] .welcome-benefits > button > svg {
   color: var(--blue);
 }
 :root[data-theme='dark'] .primary-button:hover {
