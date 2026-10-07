@@ -21,7 +21,8 @@ const DEMO_CHOICE_KEY = 'relay-chat-demo-choice-v1';
 const DEMO_ALLOWED = process.env.NODE_ENV !== 'production' || process.env.NEXT_PUBLIC_ENABLE_DEMO === 'true';
 
 export class PendingSendIds {
-  private readonly ids = new Map<string, string>();
+  private readonly ids = new Map<string, { id: string; confirmed: boolean; durable: boolean }>();
+  private readonly handles = new WeakMap<Extract<ChatAction, { type: 'send' }>, { fingerprint: string; id: string; revision: number }>();
   private revision = 0;
   private identity = '';
   private readonly prefix = 'relay-chat-send-ids-v1:';
@@ -40,41 +41,94 @@ export class PendingSendIds {
     try {
       const previous = this.storage?.getItem(this.identityKey);
       if (previous && previous !== identity) this.storage?.removeItem(this.prefix + previous);
+    } catch { /* Failed cleanup must not prevent reading this account's ledger. */ }
+    try {
       this.storage?.setItem(this.identityKey, identity);
+    } catch { /* Some privacy/storage modes permit reads but reject writes. */ }
+    try {
       const raw = this.storage?.getItem(this.prefix + identity);
       if (!raw || raw.length > 12000) return;
       const saved = JSON.parse(raw) as { version?: number; entries?: unknown };
-      if (saved.version !== 1 || !Array.isArray(saved.entries)) return;
+      if ((saved.version !== 1 && saved.version !== 2) || !Array.isArray(saved.entries)) return;
       for (const pair of saved.entries.slice(-64)) {
-        if (Array.isArray(pair) && pair.length === 2 && typeof pair[0] === 'string' && /^[0-9a-f]{64}$/.test(pair[0]) && typeof pair[1] === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(pair[1])) this.ids.set(pair[0], pair[1]);
+        if (Array.isArray(pair) && pair.length === (saved.version === 1 ? 2 : 3) && typeof pair[0] === 'string' && /^[0-9a-f]{64}$/.test(pair[0]) && typeof pair[1] === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(pair[1]) && (saved.version === 1 || typeof pair[2] === 'boolean')) this.ids.set(pair[0], { id: pair[1], confirmed: saved.version === 2 && pair[2] === true, durable: true });
       }
+      if (saved.version === 1) this.persist();
     } catch { /* Damaged or unavailable browser storage uses memory only. */ }
   }
 
   private persist() {
     if (!this.identity) return;
     try {
-      if (this.ids.size) this.storage?.setItem(this.prefix + this.identity, JSON.stringify({ version: 1, entries: [...this.ids] }));
-      else this.storage?.removeItem(this.prefix + this.identity);
+      if (this.ids.size) {
+        const raw = JSON.stringify({ version: 2, entries: [...this.ids].map(([fingerprint, value]) => [fingerprint, value.id, value.confirmed]) });
+        this.storage?.setItem(this.prefix + this.identity, raw);
+        if (this.storage?.getItem(this.prefix + this.identity) === raw)
+          for (const entry of this.ids.values()) entry.durable = true;
+      } else this.storage?.removeItem(this.prefix + this.identity);
     } catch { /* Storage capacity/privacy restrictions preserve memory retries. */ }
   }
 
-  async prepare(action: Extract<ChatAction, { type: 'send' }>) {
+  private async fingerprint(action: Extract<ChatAction, { type: 'send' }>) {
     const revision = this.revision;
     const logical = JSON.stringify([action.conversationId.toLowerCase(), action.text.trim(), action.parentId?.toLowerCase() ?? null, (action.attachments ?? []).map(file => [file.name,file.type,file.size,file.url])]);
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(logical));
     if (revision !== this.revision) throw new Error('Your account changed. Please try again.');
-    const fingerprint = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,'0')).join('');
+    return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,'0')).join('');
+  }
+
+  async inspect(action: Extract<ChatAction, { type: 'send' }>) {
+    const fingerprint = await this.fingerprint(action);
+    const entry = this.ids.get(fingerprint);
+    if (entry) this.handles.set(action, { fingerprint, id: entry.id, revision: this.revision });
+    return entry ? { fingerprint, ...entry } : null;
+  }
+
+  known(action: Extract<ChatAction, { type: 'send' }>) {
+    const handle = this.handles.get(action);
+    if (!handle || handle.revision !== this.revision) return null;
+    const entry = this.ids.get(handle.fingerprint);
+    return entry?.id === handle.id ? { fingerprint: handle.fingerprint, ...entry } : null;
+  }
+
+  async prepare(action: Extract<ChatAction, { type: 'send' }>) {
+    const fingerprint = await this.fingerprint(action);
     const existing = this.ids.get(fingerprint);
     if (!existing && this.ids.size >= 64) throw new Error('Too many messages are still unconfirmed. Retry them before sending another message.');
-    const id = action.clientMessageId ?? existing ?? crypto.randomUUID();
-    this.ids.set(fingerprint, id);
+    const id = action.clientMessageId ?? existing?.id ?? crypto.randomUUID();
+    this.ids.set(fingerprint, { id, confirmed: existing?.id === id && existing.confirmed, durable: existing?.id === id && existing.durable });
     // Retain hashes/UUIDs only, never message text or media; bound memory use.
     this.persist();
+    this.handles.set(action, { fingerprint, id, revision: this.revision });
     return { fingerprint, action: { ...action, clientMessageId: id } };
   }
 
-  acknowledge(fingerprint: string, id: string) { if (this.ids.get(fingerprint) === id) { this.ids.delete(fingerprint); this.persist(); } }
+  confirm(fingerprint: string, id: string) {
+    if (this.ids.get(fingerprint)?.id === id) {
+      this.ids.set(fingerprint, { id, confirmed: true, durable: this.ids.get(fingerprint)!.durable });
+      this.persist();
+    }
+  }
+
+  acknowledge(fingerprint: string, id: string) { if (this.ids.get(fingerprint)?.id === id) { this.ids.delete(fingerprint); this.persist(); } }
+
+  async reconcile(drafts: Extract<ChatAction, { type: 'send' }>[], committedIds: ReadonlySet<string>, hasPartialRestoredDraft = false) {
+    // Quota fallback may keep text while dropping media. Its unmatched hash
+    // cannot prove a confirmed receipt is unrelated, so retain it until a
+    // complete empty restored snapshot or explicit successful consumption.
+    if (hasPartialRestoredDraft || drafts.some(action => action.text.trim() || action.attachments?.length)) return;
+    const revision = this.revision;
+    const previous = [...this.ids];
+    const retained = new Set(await Promise.all(drafts.map(action => this.fingerprint(action))));
+    if (revision !== this.revision) throw new Error('Your account changed. Please try again.');
+    for (const [fingerprint, entry] of previous) {
+      // A crash after saving the cleared draft must not turn a later intentional
+      // identical message into a replay. Never discard an unresolved receipt.
+      if (!retained.has(fingerprint) && (entry.confirmed || committedIds.has(entry.id)) && this.ids.get(fingerprint) === entry)
+        this.ids.delete(fingerprint);
+    }
+    this.persist();
+  }
   clear(purge = false) {
     this.revision++;
     if (purge) {
@@ -87,6 +141,14 @@ export class PendingSendIds {
     this.ids.clear();
     this.identity = '';
   }
+}
+
+export function committedSend(state: ChatState, draft: Extract<ChatAction, { type: 'send' }>, id: string) {
+  // A message UUID is the server's durable send identity. Matching text alone
+  // must never erase a deliberately repeated or subsequently edited draft.
+  return state.messages.some(message => message.id === id && message.author.id === state.user.id &&
+    message.conversationId.toLowerCase() === draft.conversationId.toLowerCase() &&
+    (message.parentId?.toLowerCase() ?? null) === (draft.parentId?.toLowerCase() ?? null));
 }
 
 export function useChat(): ChatController {
@@ -487,7 +549,9 @@ export function useChat(): ChatController {
         if (start !== generation.current || modeRef.current !== 'auth') throw new Error('Your account changed. Please try again.');
         revision.current++;
         publish(result.state);
-        if (prepared && result.id === prepared.action.clientMessageId) pendingSends.current.acknowledge(prepared.fingerprint, result.id);
+        // Keep a durable confirmation until the composer has safely cleared
+        // its matching draft. Exiting between these steps must remain a replay.
+        if (prepared && result.id === prepared.action.clientMessageId) pendingSends.current.confirm(prepared.fingerprint, result.id);
         if (mutation) pendingActions.current.acknowledge(mutation.fingerprint, mutation.action.clientActionId);
         setError(null);
         return result.id;
@@ -511,6 +575,48 @@ export function useChat(): ChatController {
     queue.current = pending;
     return pending;
   }, [publish, request, reset, sync]);
+
+  const inspectSend = useCallback(async (draft: Extract<ChatAction, { type: 'send' }>) => {
+    const start = generation.current;
+    const current = stateRef.current;
+    if (modeRef.current !== 'auth' || !current || current.user.id !== identityRef.current ||
+      !current.conversations.some(conversation => conversation.id.toLowerCase() === draft.conversationId.toLowerCase())) return null;
+    pendingSends.current.bindVerifiedIdentity(current.user.id);
+    const entry = await pendingSends.current.inspect(draft);
+    if (start !== generation.current || modeRef.current !== 'auth' || stateRef.current?.user.id !== current.user.id)
+      throw new Error('Your account changed. Please try again.');
+    if (!entry) return null;
+    const confirmed = entry.confirmed || committedSend(stateRef.current, draft, entry.id);
+    if (confirmed && !entry.confirmed) pendingSends.current.confirm(entry.fingerprint, entry.id);
+    return { id: entry.id, confirmed, durable: entry.durable };
+  }, []);
+
+  const acknowledgeSend = useCallback(async (draft: Extract<ChatAction, { type: 'send' }>, id: string) => {
+    const start = generation.current;
+    const current = stateRef.current;
+    if (modeRef.current !== 'auth' || !current || current.user.id !== identityRef.current) return;
+    const known = pendingSends.current.known(draft);
+    if (known) {
+      // The caller reuses the exact prepared/inspected action object. Consume
+      // before yielding, after its durable draft change, to close the exit gap.
+      if (known.id === id && (known.confirmed || committedSend(current, draft, id)))
+        pendingSends.current.acknowledge(known.fingerprint, id);
+      return;
+    }
+    const entry = await pendingSends.current.inspect(draft);
+    if (start !== generation.current || modeRef.current !== 'auth' || stateRef.current?.user.id !== current.user.id)
+      throw new Error('Your account changed. Please try again.');
+    if (entry?.id === id && (entry.confirmed || committedSend(stateRef.current, draft, id)))
+      pendingSends.current.acknowledge(entry.fingerprint, id);
+  }, []);
+
+  const reconcileSendDrafts = useCallback(async (drafts: Extract<ChatAction, { type: 'send' }>[], hasPartialRestoredDraft = false) => {
+    const current = stateRef.current;
+    if (modeRef.current !== 'auth' || !current || current.user.id !== identityRef.current) return;
+    pendingSends.current.bindVerifiedIdentity(current.user.id);
+    const committedIds = new Set(current.messages.filter(message => message.author.id === current.user.id).map(message => message.id));
+    await pendingSends.current.reconcile(drafts, committedIds, hasPartialRestoredDraft);
+  }, []);
 
   const signIn = useCallback(() => {
     if (!authAvailable || !configRef.current) { setError('Google sign-in is unavailable. Please try again when you’re connected.'); return; }
@@ -540,5 +646,5 @@ export function useChat(): ChatController {
     }
   }, [reset]);
 
-  return { state, loading, error, demo, authAvailable, offline, action, signIn, signOut, startDemo, loadAttachment, retryAttachment, clearError: useCallback(() => setError(null), []) };
+  return { state, loading, error, demo, authAvailable, offline, action, inspectSend, acknowledgeSend, reconcileSendDrafts, signIn, signOut, startDemo, loadAttachment, retryAttachment, clearError: useCallback(() => setError(null), []) };
 }

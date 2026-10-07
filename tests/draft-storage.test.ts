@@ -56,3 +56,12 @@ test('restored own prototype-like keys never pollute another object', () => {
   assert.equal(Object.getOwnPropertyDescriptor(map, 'constructor')!.value.text, 'safe constructor');
   assert.equal(({} as { text?: string }).text, undefined);
 });
+
+test('restores only a literal omitted-attachment marker, including an empty media-only draft', () => {
+  const marked = restoreDraftMap(JSON.stringify({ design: { text: '', attachments: [], omittedAttachments: true } }), conversations);
+  assert.deepEqual(marked.design, { text: '', attachments: [], omittedAttachments: true });
+  for (const omittedAttachments of [false, 'true', 1, {}, null]) {
+    const map = restoreDraftMap(JSON.stringify({ design: { text: 'draft', attachments: [], omittedAttachments } }), conversations);
+    assert.deepEqual(map.design, { text: 'draft', attachments: [] });
+  }
+});

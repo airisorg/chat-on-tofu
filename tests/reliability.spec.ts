@@ -504,12 +504,18 @@ test('lost POST response retains the draft and retries the same message ID once'
   await expectAccountRetained(page);
 });
 
-test('lost committed POST response retries the restored draft with the same ID after reload', async ({ page, context }) => {
+test('lost committed POST response reconciles the unchanged restored draft from its exact own UUID without replay', async ({ page, context }) => {
   const fixture = await authenticatedFixture(page, context);
-  const text = 'Retry the saved draft after reloading a lost response.';
+  const text = 'Confirm the saved draft after reloading a lost response.';
   fixture.loseNextSendResponse = true;
+  // Keep the first visit uncertain until the reload's authoritative GET.
+  fixture.getMode = 'outage';
   const main = page.getByRole('main');
+  const storedDraft = () => page.evaluate(({ userId, conversationId }) =>
+    JSON.parse(localStorage.getItem(`relay-drafts:${userId}`) || '{}')[conversationId]?.text,
+  { userId, conversationId });
   await main.getByRole('textbox', { name: 'Message', exact: true }).fill(text);
+  await expect.poll(storedDraft).toBe(text);
   await main.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect.poll(() => fixture.sends.length).toBe(1);
   await expect(main.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled();
@@ -518,19 +524,29 @@ test('lost committed POST response retries the restored draft with the same ID a
   expect(originalId).toMatch(uuid);
   expect(fixture.state.messages.filter(message => message.text === text)).toHaveLength(1);
 
-  // The routed server keeps its committed state while reload recreates the
-  // hook and restores the identity-scoped draft and pending retry metadata.
-  await page.reload();
-  await expectAccountRetained(page);
-  await expect(main.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue(text);
-  await expect(main.getByRole('article').filter({ hasText: text })).toHaveCount(1);
-  await main.getByRole('button', { name: 'Send message', exact: true }).click();
-  await expect.poll(() => fixture.sends.length).toBe(2);
-  await expect(main.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('');
-  expect(fixture.sends[1].clientMessageId).toBe(originalId);
-  expect(fixture.state.messages.filter(message => message.text === text)).toHaveLength(1);
-  await expect(main.getByRole('article').filter({ hasText: text })).toHaveCount(1);
-  await expectAccountRetained(page);
+  // Hold startup confirmation: the saved draft must not be discarded simply
+  // because a send was attempted. Release the authenticated own-message state
+  // only after checking durable draft retention and zero replay POSTs.
+  fixture.getMode = 'hold-next';
+  try {
+    await page.reload();
+    await expect.poll(() => fixture.heldGets).toBe(1);
+    expect(await storedDraft()).toBe(text);
+    expect(fixture.sends).toHaveLength(1);
+    await expect(main.locator(`#message-${originalId}`)).toHaveCount(0);
+    fixture.releaseHeld();
+    await expectAccountRetained(page);
+    await expect(main.locator(`#message-${originalId}`)).toHaveCount(1);
+    await expect(main.locator(`#message-${originalId}`)).toContainText(text);
+    await expect(main.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('');
+    await expect(main.getByRole('button', { name: 'Send message', exact: true })).toBeDisabled();
+    await expect.poll(storedDraft).toBe('');
+    expect(fixture.sends).toHaveLength(1);
+    const saved = fixture.state.messages.filter(message => message.id === originalId);
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({ author: { id: userId }, conversationId, text });
+    expect(fixture.state.messages.filter(message => message.text === text)).toHaveLength(1);
+  } finally { fixture.releaseHeld(); fixture.getMode = 'ok'; }
 });
 
 test('intentional repeated successful identical messages receive new IDs', async ({ page, context }) => {

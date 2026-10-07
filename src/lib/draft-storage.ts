@@ -1,7 +1,7 @@
 import type { Attachment, Conversation } from './types';
 import { MAX_ACTION_BODY_BYTES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from './media-limits';
 
-export type DraftMap = Record<string, { text: string; attachments: Attachment[] }>;
+export type DraftMap = Record<string, { text: string; attachments: Attachment[]; omittedAttachments?: boolean }>;
 const supportedType = /^(image\/(png|jpeg|gif|webp)|text\/plain|application\/pdf|audio\/(webm|mp4|ogg|mpeg|wav))$/;
 const record = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
@@ -34,7 +34,7 @@ export function restoreDraftMap(raw: string | null, conversations: readonly Pick
       const attachments = Array.isArray(value.attachments)
         ? value.attachments.slice(0, MAX_ATTACHMENTS).map(restoreAttachment).filter((attachment): attachment is Attachment => !!attachment)
         : [];
-      restored[id] = { text, attachments };
+      restored[id] = { text, attachments, ...(value.omittedAttachments === true ? { omittedAttachments: true } : {}) };
     }
   } catch { /* An invalid JSON draft resets without disrupting the workspace. */ }
   return restored;

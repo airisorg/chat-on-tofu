@@ -18,4 +18,6 @@ export type ChatAction = (
  | { type: 'leave'; conversationId: string }
  | { type: 'profile'; name?: string; status?: string }
 ) & { clientActionId?: string; clientActionCreatedAt?: string };
-export type ChatController = { state: ChatState | null; loading: boolean; error: string | null; demo: boolean; authAvailable: boolean; offline: boolean; action: (action: ChatAction) => Promise<string | undefined>; signIn: () => void; signOut: () => Promise<void>; startDemo: () => void; clearError: () => void; loadAttachment: (messageId: string, index: number) => void; retryAttachment: (messageId: string, index: number) => void };
+export type SendDraft = Extract<ChatAction, { type: 'send' }>;
+export type SendRecovery = { id: string; confirmed: boolean; durable: boolean };
+export type ChatController = { state: ChatState | null; loading: boolean; error: string | null; demo: boolean; authAvailable: boolean; offline: boolean; action: (action: ChatAction) => Promise<string | undefined>; inspectSend: (draft: SendDraft) => Promise<SendRecovery | null>; acknowledgeSend: (draft: SendDraft, id: string) => Promise<void>; reconcileSendDrafts: (drafts: SendDraft[], hasPartialRestoredDraft?: boolean) => Promise<void>; signIn: () => void; signOut: () => Promise<void>; startDemo: () => void; clearError: () => void; loadAttachment: (messageId: string, index: number) => void; retryAttachment: (messageId: string, index: number) => void };

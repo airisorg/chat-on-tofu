@@ -391,6 +391,7 @@ export default function ChatApp() {
     stage: "sending" | "unconfirmed";
     text: string;
     attachments: Attachment[];
+    durable?: boolean;
   }>>({});
   const [draftStorageIssue, setDraftStorageIssue] = useState<"attachments" | "all" | null>(null);
   const [saveDrafts, setSaveDrafts] = useState(true);
@@ -448,6 +449,8 @@ export default function ChatApp() {
     }
   }
   const draftMap = useRef<DraftMap>({});
+  const recoveredDrafts = useRef<DraftMap>({});
+  const recoveredReceiptOwner = useRef<string | null>(null);
   const threadDraftMap = useRef<Record<string, string>>({});
   const threadDraftRevision = useRef<Record<string, number>>({});
   const draftOwner = useRef<string | null>(null);
@@ -551,6 +554,8 @@ export default function ChatApp() {
     setSaveDrafts(enabled);
     setRenderedDraftOwner(userId);
     draftMap.current = {};
+    recoveredDrafts.current = {};
+    recoveredReceiptOwner.current = null;
     threadDraftMap.current = {};
     threadDraftRevision.current = {};
     miniDraftMap.current = {};
@@ -581,6 +586,7 @@ export default function ChatApp() {
         if (enabled) draftMap.current = restoreDraftMap(localStorage.getItem(savedDraftsKey(userId)), state.conversations);
         else localStorage.removeItem(savedDraftsKey(userId));
       } catch {}
+      recoveredDrafts.current = { ...draftMap.current };
       let invitation = "";
       try {
         invitation = sessionStorage.getItem("chat-pending-invitation") || "";
@@ -613,37 +619,41 @@ export default function ChatApp() {
       }
     }
   }, [state]);
-  function persistDrafts(owner: string) {
-    if (draftOwner.current !== owner || draftRetention.current.owner !== owner || !draftRetention.current.enabled) return;
+  function persistDrafts(owner: string): boolean {
+    if (draftOwner.current !== owner || draftRetention.current.owner !== owner) return false;
+    if (!draftRetention.current.enabled) {
+      try { return localStorage.getItem(savedDraftsKey(owner)) === null; } catch { return false; }
+    }
     try {
       // Another tab can opt this account out before its storage event arrives.
       if (!readDraftSaving(owner, localStorage)) {
         draftRetention.current.enabled = false;
         setSaveDrafts(false);
         setDraftStorageIssue(null);
-        return;
+        return localStorage.getItem(savedDraftsKey(owner)) === null;
       }
-      localStorage.setItem(
-        `relay-drafts:${owner}`,
-        JSON.stringify(draftMap.current),
-      );
+      const raw = JSON.stringify(draftMap.current);
+      localStorage.setItem(savedDraftsKey(owner), raw);
+      if (localStorage.getItem(savedDraftsKey(owner)) !== raw) throw new Error("Draft storage did not retain this change.");
       setDraftStorageIssue(null);
+      return true;
     } catch {
       try {
-        localStorage.setItem(
-          `relay-drafts:${owner}`,
-          JSON.stringify(
+        const raw = JSON.stringify(
             Object.fromEntries(
               Object.entries(draftMap.current).map(([id, d]) => [
                 id,
-                { text: d.text, attachments: [] },
+                { text: d.text, attachments: [], ...(d.attachments.length || d.omittedAttachments ? { omittedAttachments: true } : {}) },
               ]),
             ),
-          ),
-        );
+          );
+        localStorage.setItem(savedDraftsKey(owner), raw);
+        if (localStorage.getItem(savedDraftsKey(owner)) !== raw) throw new Error("Draft storage did not retain this change.");
         setDraftStorageIssue("attachments");
+        return true;
       } catch {
         setDraftStorageIssue("all");
+        return false;
       }
     }
   }
@@ -701,6 +711,58 @@ export default function ChatApp() {
       draftMap.current[selectedId] = { text: draft, attachments };
     persistDrafts(state.user.id);
   }, [draft, attachments, selectedId, state?.user.id, renderedDraftOwner]);
+  useEffect(() => {
+    const owner = state?.user.id;
+    if (!owner || renderedDraftOwner !== owner || draftOwner.current !== owner) return;
+    const generation = miniGeneration.current;
+    let cancelled = false;
+    const stillOwned = () => !cancelled && currentUserNow.current === owner &&
+      draftOwner.current === owner && miniGeneration.current === generation;
+    const recovered = Object.entries(recoveredDrafts.current);
+    void (async () => {
+      // The complete restored snapshot must be known before pruning receipts:
+      // a confirmed UUID may still protect a durable draft from an earlier exit.
+      if (recoveredReceiptOwner.current !== owner) {
+        await chat.reconcileSendDrafts(recovered.map(([conversationId, value]) => ({
+          type: "send", conversationId, text: value.text.trim(), attachments: value.attachments,
+        })), recovered.some(([, value]) => value.omittedAttachments === true));
+        if (!stillOwned()) return;
+        recoveredReceiptOwner.current = owner;
+      }
+      for (const [conversationId, value] of recovered) {
+        if (!stillOwned()) return;
+        if (draftMap.current[conversationId] !== value) {
+          delete recoveredDrafts.current[conversationId];
+          continue;
+        }
+        const action: Extract<ChatAction, { type: "send" }> = {
+          type: "send", conversationId, text: value.text.trim(), attachments: value.attachments,
+        };
+        const receipt = await chat.inspectSend(action);
+        if (!stillOwned()) return;
+        if (draftMap.current[conversationId] !== value) continue;
+        if (!receipt) { delete recoveredDrafts.current[conversationId]; continue; }
+        const key = `${conversationId}:main`;
+        if (receipt.confirmed) {
+          draftMap.current[conversationId] = { text: "", attachments: [] };
+          const current = mainDraftNow.current;
+          if (current.selectedId === conversationId && current.text === value.text && current.attachments === value.attachments) {
+            setDraft(""); setAttachments([]);
+          }
+          setSendFeedback(previous => { const next = { ...previous }; delete next[key]; return next; });
+          // Keep the confirmed receipt if the old durable draft could not be
+          // removed. A later reload can then recover by the same UUID safely.
+          if (persistDrafts(owner)) await chat.acknowledgeSend(action, receipt.id);
+          delete recoveredDrafts.current[conversationId];
+        } else {
+          setSendFeedback(previous => ({ ...previous, [key]: {
+            stage: "unconfirmed", text: value.text, attachments: value.attachments, durable: receipt.durable,
+          } }));
+        }
+      }
+    })().catch(() => { /* Account transitions preserve drafts; a future sync can retry recovery. */ });
+    return () => { cancelled = true; };
+  }, [state, renderedDraftOwner, chat.inspectSend, chat.acknowledgeSend, chat.reconcileSendDrafts]);
   useEffect(() => {
     if (threadId) setThreadDraft(threadDraftMap.current[threadId] || "");
     else setThreadDraft("");
@@ -868,8 +930,10 @@ export default function ChatApp() {
     if (miniPending.current.has(conversationId)) throw new Error("This message is still sending. Please wait.");
     miniPending.current.add(conversationId);
     setMiniPendingIds([...miniPending.current]);
+    const action: Extract<ChatAction, { type: "send" }> = { type: "send", conversationId, text: value.text.trim(), attachments: value.attachments };
+    let id: string | undefined;
     try {
-      await act({ type: "send", conversationId, text: value.text.trim(), attachments: value.attachments });
+      id = await act(action);
     } finally {
       if (currentUserNow.current === owner && draftOwner.current === owner && miniGeneration.current === generation) {
         miniPending.current.delete(conversationId);
@@ -880,20 +944,24 @@ export default function ChatApp() {
     // account change or a newly edited draft must never be overwritten.
     if (currentUserNow.current !== owner || draftOwner.current !== owner || miniGeneration.current !== generation) return;
     const transferred = expandedMiniDraft.current[conversationId];
+    let durable = true;
     if (transferred === value) {
       const current = mainDraftNow.current;
       const stored = draftMap.current[conversationId];
       if (stored === value) {
         draftMap.current[conversationId] = { text: "", attachments: [] };
-        persistDrafts(owner);
         if (current.selectedId === conversationId && current.text === value.text && current.attachments === value.attachments) { setDraft(""); setAttachments([]); }
       }
       delete expandedMiniDraft.current[conversationId];
     }
-    if (miniDraftMap.current[conversationId] !== value) return;
-    const empty = { text: "", attachments: [] };
-    miniDraftMap.current[conversationId] = empty;
-    if (miniIdRef.current === conversationId) setMiniDraft(empty);
+    if (miniDraftMap.current[conversationId] === value) {
+      const empty = { text: "", attachments: [] };
+      miniDraftMap.current[conversationId] = empty;
+      if (miniIdRef.current === conversationId) setMiniDraft(empty);
+    }
+    if (transferred) durable = persistDrafts(owner);
+    if (!durable) return;
+    if (id) await chat.acknowledgeSend(action, id);
   }
   function expandMini() {
     if (!state || !miniConversation || miniOwner.current !== state.user.id) { closeMini(); return; }
@@ -953,6 +1021,7 @@ export default function ChatApp() {
     const stillOwned = () => currentUserNow.current === owner &&
       draftOwner.current === owner && miniGeneration.current === generation;
     const feedbackKey = `${conversationId}:${parentId || "main"}`;
+    if (!inThread) delete recoveredDrafts.current[conversationId];
     const sentAttachments = inThread ? [] : attachments;
     setSendFeedback((previous) => ({ ...previous, [feedbackKey]: {
       stage: "sending", text, attachments: sentAttachments,
@@ -961,13 +1030,14 @@ export default function ChatApp() {
     if (inThread) threadAtBottom.current = true;
     else atBottom.current = true;
     try {
-      await act({
+      const action: Extract<ChatAction, { type: "send" }> = {
         type: "send",
         conversationId,
         text: text.trim(),
         ...(parentId ? { parentId } : {}),
         attachments: inThread ? [] : attachments,
-      });
+      };
+      const id = await act(action);
       if (!stillOwned()) return;
       setSendFeedback((previous) => {
         const next = { ...previous };
@@ -984,21 +1054,30 @@ export default function ChatApp() {
             threadComposerRef.current?.focus();
           }
         }
+        if (id) await chat.acknowledgeSend(action, id);
       } else if (draftMap.current[conversationId] === sentDraft) {
         const current = mainDraftNow.current;
         draftMap.current[conversationId] = { text: "", attachments: [] };
         // Persist the acknowledged conversation even when another one is open.
-        persistDrafts(owner);
+        const durable = persistDrafts(owner);
         if (current.selectedId === conversationId && current.text === text && current.attachments === attachments) {
           setDraft("");
           setAttachments([]);
           composerRef.current?.focus();
         }
+        if (id && durable) await chat.acknowledgeSend(action, id);
+      } else {
+        // A newer draft is intentional, even when edited back to the same text.
+        // Persist that replacement before consuming the older confirmation.
+        if (id && persistDrafts(owner)) await chat.acknowledgeSend(action, id);
       }
     } catch {
-      if (stillOwned()) setSendFeedback((previous) => ({ ...previous, [feedbackKey]: {
-        stage: "unconfirmed", text, attachments: sentAttachments,
-      } }));
+      if (stillOwned()) {
+        const receipt = await chat.inspectSend({ type: "send", conversationId, text: text.trim(), ...(parentId ? { parentId } : {}), attachments: sentAttachments }).catch(() => null);
+        if (stillOwned()) setSendFeedback((previous) => ({ ...previous, [feedbackKey]: {
+          stage: "unconfirmed", text, attachments: sentAttachments, durable: receipt?.durable,
+        } }));
+      }
     } finally {
       if (stillOwned()) setSending(false);
     }
@@ -1589,10 +1668,14 @@ export default function ChatApp() {
           : chat.offline
             ? "You may be offline. Your draft is kept here. You can try sending."
             : "";
-    const storageNote = !inThread && draftStorageIssue && (draftStorageIssue === "all" || attachments.length)
+    const storageNote = feedback?.durable === false
+      ? "Keep this page open. Retry protection could not be saved for a reload."
+      : !inThread && selectedId && draftMap.current[selectedId]?.omittedAttachments
+        ? "Some attachments weren’t saved. Check the conversation before adding files and sending again."
+      : !inThread && draftStorageIssue && (draftStorageIssue === "all" || attachments.length)
       ? draftStorageIssue === "all"
         ? "Keep this page open until sending is confirmed. This draft could not be saved for a reload."
-        : "Attachments stay in this open page. Reloading may require adding them again."
+        : "Attachments stay in this open page. After reloading, check the conversation before adding files and sending again."
       : "";
     if (!status && !storageNote) return null;
     return <div className={`composer-status ${feedback?.stage === "unconfirmed" ? "unconfirmed" : ""}`} role="status" aria-live="polite">
