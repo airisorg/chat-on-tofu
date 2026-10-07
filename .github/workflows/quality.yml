@@ -89,6 +89,7 @@ jobs:
             },null,2));
           '
       - name: Exercise native concurrency and compiled HTTP routes
+        shell: bash
         env:
           CHAT_NATIVE_WORK_DIR: ${{ runner.temp }}/relay-native
         run: npm run test:native 2>&1 | tee test-results/native-ci.log

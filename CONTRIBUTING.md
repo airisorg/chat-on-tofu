@@ -15,8 +15,9 @@ dependency advisories and selected functional browser tests. A separate security
 workflow scans reachable Git history and the checked-out tree. GitHub-managed
 CodeQL default setup separately analyzes JavaScript/TypeScript in this repository;
 fork owners must enable code scanning for their own fork.
-Native PostgreSQL tests and the complete macOS screenshot gate still require
-their documented local runs. CI never receives production credentials.
+Native PostgreSQL and compiled API integration also run in CI with disposable
+fixtures. The complete macOS screenshot gate retains its documented local run.
+CI never receives production credentials.
 
 ESLint uses current JavaScript/TypeScript recommended rules and React's two
 core Hooks correctness rules. The Next-specific lint bundle is intentionally
