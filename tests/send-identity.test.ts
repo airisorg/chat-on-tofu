@@ -5,7 +5,12 @@ import type { ChatState, SendDraft } from '../src/lib/types';
 
 const conversationId = '11111111-1111-4111-8111-111111111111';
 const parentId = '22222222-2222-4222-8222-222222222222';
-const draft: SendDraft = { type: 'send', conversationId, text: 'Lifecycle fixture text', attachments: [] };
+const draft: SendDraft = {
+  type: 'send',
+  conversationId,
+  text: 'Lifecycle fixture text',
+  attachments: [],
+};
 const key = 'relay-chat-send-ids-v1:account-a';
 
 function memoryStorage() {
@@ -13,7 +18,9 @@ function memoryStorage() {
   let rejectWrites = false;
   return {
     values,
-    rejectWrites(value: boolean) { rejectWrites = value; },
+    rejectWrites(value: boolean) {
+      rejectWrites = value;
+    },
     getItem: (name: string) => values.get(name) ?? null,
     setItem(name: string, value: string) {
       if (rejectWrites) throw new Error('Synthetic storage unavailable');
@@ -40,7 +47,10 @@ test('unconfirmed send identity survives close without creating an identity duri
   assert.equal(recovered?.id, prepared.action.clientMessageId);
   assert.equal(recovered?.confirmed, false);
   assert.equal(recovered?.durable, true);
-  assert.equal((await reopened.prepare(draft)).action.clientMessageId, prepared.action.clientMessageId);
+  assert.equal(
+    (await reopened.prepare(draft)).action.clientMessageId,
+    prepared.action.clientMessageId,
+  );
 });
 
 test('accepted ACK remains durable until the exact draft is consumed', async () => {
@@ -61,7 +71,10 @@ test('accepted ACK remains durable until the exact draft is consumed', async () 
   assert.equal((await reopened.inspect(draft))?.confirmed, true);
   reopened.acknowledge(prepared.fingerprint, prepared.action.clientMessageId);
   assert.equal(await reopened.inspect(draft), null);
-  assert.notEqual((await reopened.prepare(draft)).action.clientMessageId, prepared.action.clientMessageId);
+  assert.notEqual(
+    (await reopened.prepare(draft)).action.clientMessageId,
+    prepared.action.clientMessageId,
+  );
 });
 
 test('crash after durable draft clear retires confirmed receipt before an intentional identical send', async () => {
@@ -75,7 +88,10 @@ test('crash after durable draft clear retires confirmed receipt before an intent
   reopened.bindVerifiedIdentity('account-a');
   await reopened.reconcile([], new Set());
   assert.equal(await reopened.inspect(draft), null);
-  assert.notEqual((await reopened.prepare(draft)).action.clientMessageId, prepared.action.clientMessageId);
+  assert.notEqual(
+    (await reopened.prepare(draft)).action.clientMessageId,
+    prepared.action.clientMessageId,
+  );
 });
 
 test('authoritative own UUID retires only an absent committed receipt and preserves unresolved drafts', async () => {
@@ -97,7 +113,13 @@ test('version1 pending pairs migrate without inventing confirmation or persistin
   const seed = new PendingSendIds(storage);
   seed.bindVerifiedIdentity('account-a');
   const prepared = await seed.prepare(draft);
-  storage.values.set(key, JSON.stringify({ version: 1, entries: [[prepared.fingerprint, prepared.action.clientMessageId]] }));
+  storage.values.set(
+    key,
+    JSON.stringify({
+      version: 1,
+      entries: [[prepared.fingerprint, prepared.action.clientMessageId]],
+    }),
+  );
   const recovered = new PendingSendIds(storage);
   recovered.bindVerifiedIdentity('account-a');
   assert.equal((await recovered.inspect(draft))?.confirmed, false);
@@ -116,21 +138,47 @@ test('edited text, media, conversation and thread never inspect as the original 
     { ...draft, text: 'A deliberate edit' },
     { ...draft, conversationId: parentId },
     { ...draft, parentId },
-    { ...draft, attachments: [{ name: 'fixture.txt', type: 'text/plain', size: 1, url: 'data:text/plain;base64,QQ==' }] },
-  ]) assert.equal(await ids.inspect(changed), null);
-  assert.equal((await ids.inspect({ ...draft, text: ` ${draft.text} ` }))?.id, prepared.action.clientMessageId);
+    {
+      ...draft,
+      attachments: [
+        { name: 'fixture.txt', type: 'text/plain', size: 1, url: 'data:text/plain;base64,QQ==' },
+      ],
+    },
+  ])
+    assert.equal(await ids.inspect(changed), null);
+  assert.equal(
+    (await ids.inspect({ ...draft, text: ` ${draft.text} ` }))?.id,
+    prepared.action.clientMessageId,
+  );
 });
 
 test('authoritative confirmation requires current owner, exact UUID, conversation and parent', () => {
   const user = { id: 'account-a', name: 'Fixture owner', email: 'owner@example.com' };
   const id = crypto.randomUUID();
-  const state: ChatState = { user, conversations: [], messages: [{ id, conversationId, author: user, text: 'Subsequently edited text', createdAt: new Date().toISOString(), attachments: [], reactions: [] }] };
+  const state: ChatState = {
+    user,
+    conversations: [],
+    messages: [
+      {
+        id,
+        conversationId,
+        author: user,
+        text: 'Subsequently edited text',
+        createdAt: new Date().toISOString(),
+        attachments: [],
+        reactions: [],
+      },
+    ],
+  };
   assert.equal(committedSend(state, draft, id), true);
   assert.equal(committedSend(state, { ...draft, parentId }, id), false);
   assert.equal(committedSend(state, { ...draft, conversationId: parentId }, id), false);
   assert.equal(committedSend(state, draft, crypto.randomUUID()), false);
   assert.equal(committedSend({ ...state, user: { ...user, id: 'account-b' } }, draft, id), false);
-  assert.equal(committedSend({ ...state, messages: [{ ...state.messages[0], parentId }] }, draft, id), false);
+  assert.equal(
+    committedSend({ ...state, messages: [{ ...state.messages[0], parentId }] }, draft, id),
+    false,
+  );
 });
 
 test('failed first UUID write exposes memory-only recovery without claiming reload durability', async () => {
@@ -169,9 +217,17 @@ test('readable legacy and confirmed receipts restore even when all storage write
     const seed = new PendingSendIds(storage);
     seed.bindVerifiedIdentity('account-a');
     const prepared = await seed.prepare(draft);
-    storage.values.set(key, JSON.stringify({ version, entries: [version === 1
-      ? [prepared.fingerprint, prepared.action.clientMessageId]
-      : [prepared.fingerprint, prepared.action.clientMessageId, true]] }));
+    storage.values.set(
+      key,
+      JSON.stringify({
+        version,
+        entries: [
+          version === 1
+            ? [prepared.fingerprint, prepared.action.clientMessageId]
+            : [prepared.fingerprint, prepared.action.clientMessageId, true],
+        ],
+      }),
+    );
     storage.values.set('relay-chat-send-ids-last-identity-v1', 'previous-account');
     storage.rejectWrites(true);
     const reopened = new PendingSendIds(storage);
@@ -192,10 +248,19 @@ test('capacity preserves existing unresolved identities through confirmation and
   ids.confirm(first.fingerprint, first.action.clientMessageId);
   const reopened = new PendingSendIds(storage);
   reopened.bindVerifiedIdentity('account-a');
-  await assert.rejects(reopened.prepare({ ...draft, text: 'New intent at capacity' }), /Too many messages/);
-  assert.equal((await reopened.prepare(draft)).action.clientMessageId, first.action.clientMessageId);
+  await assert.rejects(
+    reopened.prepare({ ...draft, text: 'New intent at capacity' }),
+    /Too many messages/,
+  );
+  assert.equal(
+    (await reopened.prepare(draft)).action.clientMessageId,
+    first.action.clientMessageId,
+  );
   await reopened.reconcile([], new Set());
-  assert.notEqual((await reopened.prepare(draft)).action.clientMessageId, first.action.clientMessageId);
+  assert.notEqual(
+    (await reopened.prepare(draft)).action.clientMessageId,
+    first.action.clientMessageId,
+  );
 });
 
 test('account changes cancel asynchronous inspection and reconciliation without exposing former IDs', async () => {
@@ -244,7 +309,12 @@ test('text-only quota restoration preserves the full-media confirmed UUID for re
   const storage = memoryStorage();
   const ids = new PendingSendIds(storage);
   ids.bindVerifiedIdentity('account-a');
-  const withMedia: SendDraft = { ...draft, attachments: [{ name: 'fixture.txt', type: 'text/plain', size: 1, url: 'data:text/plain;base64,QQ==' }] };
+  const withMedia: SendDraft = {
+    ...draft,
+    attachments: [
+      { name: 'fixture.txt', type: 'text/plain', size: 1, url: 'data:text/plain;base64,QQ==' },
+    ],
+  };
   const sent = await ids.prepare(withMedia);
   ids.confirm(sent.fingerprint, sent.action.clientMessageId);
   ids.clear();
@@ -252,7 +322,10 @@ test('text-only quota restoration preserves the full-media confirmed UUID for re
   reopened.bindVerifiedIdentity('account-a');
   // Quota fallback saved this text but omitted the attachment. Its fingerprint
   // cannot prove that the full-media receipt is an unrelated intentional send.
-  await reopened.reconcile([{ ...withMedia, attachments: [] }], new Set([sent.action.clientMessageId]));
+  await reopened.reconcile(
+    [{ ...withMedia, attachments: [] }],
+    new Set([sent.action.clientMessageId]),
+  );
   const repicked = await reopened.prepare(withMedia);
   assert.equal(repicked.action.clientMessageId, sent.action.clientMessageId);
   assert.equal((await reopened.inspect(withMedia))?.confirmed, true);
@@ -262,7 +335,13 @@ test('explicit partial restoration retains a media-only receipt despite an empty
   const storage = memoryStorage();
   const ids = new PendingSendIds(storage);
   ids.bindVerifiedIdentity('account-a');
-  const mediaOnly: SendDraft = { ...draft, text: '', attachments: [{ name: 'fixture.txt', type: 'text/plain', size: 1, url: 'data:text/plain;base64,QQ==' }] };
+  const mediaOnly: SendDraft = {
+    ...draft,
+    text: '',
+    attachments: [
+      { name: 'fixture.txt', type: 'text/plain', size: 1, url: 'data:text/plain;base64,QQ==' },
+    ],
+  };
   const sent = await ids.prepare(mediaOnly);
   ids.confirm(sent.fingerprint, sent.action.clientMessageId);
   await ids.reconcile([], new Set([sent.action.clientMessageId]), true);

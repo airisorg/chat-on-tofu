@@ -1,0 +1,79 @@
+name: Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:coverage
+      - run: npm audit --audit-level=moderate
+      - run: npm run build
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: node-coverage
+          path: test-results/coverage/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      APP_URL: http://127.0.0.1:3100
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run build
+      - name: Serve the local synthetic-identity fixture
+        run: |
+          SUPABASE_URL=https://reliability-test.invalid SUPABASE_ANON_KEY=sb_publishable_ci_fixture npm start -- --hostname 127.0.0.1 --port 3100 > /tmp/chat-server.log 2>&1 &
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent "$APP_URL" > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/chat-server.log
+          exit 1
+      # Pixel baselines are macOS-specific; these suites assert behavior without
+      # updating or weakening the separate macOS screenshot gate.
+      - run: npm run test:security
+      - run: npm run test:reliability
+      - run: npm run test:offline
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: failure()
+        with:
+          name: browser-failures
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7

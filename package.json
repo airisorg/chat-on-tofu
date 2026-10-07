@@ -6,12 +6,12 @@
     "dev": "next dev",
     "build": "tsx scripts/verify-database.ts && next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "test:backend": "tsx --test tests/backend.test.ts tests/database.test.ts",
     "test:ux": "playwright test",
     "test:platform": "playwright test --config playwright.platform.config.ts",
     "test:reliability": "playwright test --config playwright.reliability.config.ts",
-    "test:unit": "tsx --test tests/*.test.ts",
+    "test:unit": "tsx scripts/test-node.ts",
     "test:network": "playwright test --config playwright.network-ux.config.ts",
     "test:visual": "playwright test --config playwright.visual.config.ts",
     "test:spacing": "playwright test --config playwright.spacing.config.ts",
@@ -30,7 +30,15 @@
     "test:dialog-visual": "playwright test --config playwright.dialog-visual.config.ts",
     "test:home-toolbar": "playwright test --config playwright.home-toolbar.config.ts",
     "test:browser:list": "tsx scripts/test-browser-suites.ts --list",
-    "test:browser:all": "tsx scripts/test-browser-suites.ts"
+    "test:browser:all": "tsx scripts/test-browser-suites.ts",
+    "test:catalog": "tsx scripts/test-catalog.ts",
+    "test:unit:fast": "tsx scripts/test-node.ts unit",
+    "test:sql": "tsx scripts/test-node.ts sql",
+    "test:native": "tsx scripts/test-node.ts native",
+    "test:coverage": "c8 tsx scripts/test-node.ts && tsx scripts/check-coverage.ts",
+    "lint": "eslint . --max-warnings=0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@emoji-mart/data": "1.2.1",
@@ -43,16 +51,24 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",
+    "@eslint/js": "10.0.1",
     "@playwright/test": "^1.55.0",
     "@types/node": "^22.18.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
+    "c8": "11.0.0",
+    "esbuild": "0.28.2",
+    "eslint": "10.12.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.13.0",
+    "prettier": "3.9.9",
     "sharp": "^0.35.5",
     "tsx": "^4.23.15",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "typescript-eslint": "8.71.1"
   },
   "license": "MIT",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   }
 }

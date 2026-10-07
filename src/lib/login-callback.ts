@@ -1,36 +1,59 @@
 /** Bind the broker callback to this tab's explicit sign-in request. */
-export const LOGIN_REQUEST_KEY = "chat-login-request-v1";
-export const LOGIN_NONCE_QUERY = "chat_login_nonce";
+export const LOGIN_REQUEST_KEY = 'chat-login-request-v1';
+export const LOGIN_NONCE_QUERY = 'chat_login_nonce';
 export const LOGIN_REQUEST_TTL_MS = 10 * 60 * 1000;
 const NONCE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const AUTH_KEYS = ["access_token", "refresh_token", "provider_token", "provider_refresh_token", "expires_in", "expires_at", "token_type", "type", "error", "error_description", "error_code"];
-type StorageAccess = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+const AUTH_KEYS = [
+  'access_token',
+  'refresh_token',
+  'provider_token',
+  'provider_refresh_token',
+  'expires_in',
+  'expires_at',
+  'token_type',
+  'type',
+  'error',
+  'error_description',
+  'error_code',
+];
+type StorageAccess = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 export function beginLogin(returnUrl: string, storage: StorageAccess, now = Date.now()): string {
   const nonce = crypto.randomUUID();
   const record = JSON.stringify({ nonce, createdAt: now });
   storage.setItem(LOGIN_REQUEST_KEY, record);
-  if (storage.getItem(LOGIN_REQUEST_KEY) !== record) throw new Error("This browser could not save the sign-in request.");
+  if (storage.getItem(LOGIN_REQUEST_KEY) !== record)
+    throw new Error('This browser could not save the sign-in request.');
   const callback = new URL(returnUrl);
   callback.searchParams.set(LOGIN_NONCE_QUERY, nonce);
   return callback.href;
 }
 
-export function inspectLoginCallback(url: URL, storage: Pick<Storage, "getItem">, now = Date.now()) {
+export function inspectLoginCallback(
+  url: URL,
+  storage: Pick<Storage, 'getItem'>,
+  now = Date.now(),
+) {
   const hash = new URLSearchParams(url.hash.slice(1));
-  const hasCallback = AUTH_KEYS.some(key => hash.has(key) || url.searchParams.has(key));
+  const hasCallback = AUTH_KEYS.some((key) => hash.has(key) || url.searchParams.has(key));
   if (!hasCallback) return { hasCallback: false, accepted: false };
   let accepted = false;
   try {
     const raw = storage.getItem(LOGIN_REQUEST_KEY);
     if (raw && raw.length <= 200) {
       const pending = JSON.parse(raw) as { nonce?: unknown; createdAt?: unknown };
-      accepted = typeof pending.nonce === "string" && NONCE.test(pending.nonce) &&
+      accepted =
+        typeof pending.nonce === 'string' &&
+        NONCE.test(pending.nonce) &&
         url.searchParams.get(LOGIN_NONCE_QUERY) === pending.nonce &&
-        typeof pending.createdAt === "number" && Number.isFinite(pending.createdAt) &&
-        now >= pending.createdAt && now - pending.createdAt < LOGIN_REQUEST_TTL_MS;
+        typeof pending.createdAt === 'number' &&
+        Number.isFinite(pending.createdAt) &&
+        now >= pending.createdAt &&
+        now - pending.createdAt < LOGIN_REQUEST_TTL_MS;
     }
-  } catch { /* Unavailable or malformed tab storage cannot authorize a callback. */ }
+  } catch {
+    /* Unavailable or malformed tab storage cannot authorize a callback. */
+  }
   return { hasCallback: true, accepted };
 }
 

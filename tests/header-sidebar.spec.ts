@@ -9,24 +9,36 @@ import { evidenceDirectory } from './browser-config';
 async function fixture(page: Page, theme: 'light' | 'dark') {
   const state = createDemoState();
   await page.emulateMedia({ colorScheme: theme });
-  await page.addInitScript(({ key, state }) => {
-    localStorage.setItem(key, JSON.stringify(state));
-    localStorage.setItem('relay-theme', 'system');
-  }, { key: DEMO_STORAGE_KEY, state });
-  await page.route('**/api/config', route => route.fulfill({ json: { supabaseUrl: '', supabaseAnonKey: '', databaseConfigured: false } }));
+  await page.addInitScript(
+    ({ key, state }) => {
+      localStorage.setItem(key, JSON.stringify(state));
+      localStorage.setItem('relay-theme', 'system');
+    },
+    { key: DEMO_STORAGE_KEY, state },
+  );
+  await page.route('**/api/config', (route) =>
+    route.fulfill({ json: { supabaseUrl: '', supabaseAnonKey: '', databaseConfigured: false } }),
+  );
   await page.goto('/');
   await page.getByRole('button', { name: 'Explore demo', exact: true }).click();
   await page.evaluate(() => document.fonts.ready);
 }
 const sidebar = (page: Page) => page.getByRole('complementary', { name: 'Chat navigation' });
 const full = (page: Page) => page.getByRole('region', { name: 'Conversation', exact: true });
-const preview = (page: Page) => page.getByRole('region', { name: 'Conversation preview', exact: true });
+const preview = (page: Page) =>
+  page.getByRole('region', { name: 'Conversation preview', exact: true });
 
 async function hit(control: Locator) {
   await expect(control).toHaveCount(1);
-  const result = await control.evaluate(node => {
+  const result = await control.evaluate((node) => {
     const r = node.getBoundingClientRect();
-    return { hit: node.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)), width: r.width, height: r.height, x: r.x, right: r.right };
+    return {
+      hit: node.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)),
+      width: r.width,
+      height: r.height,
+      x: r.x,
+      right: r.right,
+    };
   });
   expect(result.hit).toBe(true);
   return result;
@@ -36,95 +48,159 @@ async function headings(page: Page) {
   for (const name of ['Shortcuts', 'Direct messages', 'Spaces']) {
     const button = sidebar(page).getByRole('button', { name, exact: true });
     await expect(button).toHaveCount(1);
-    result.push(await button.evaluate(node => {
-      const s = getComputedStyle(node);
-      return { family: s.fontFamily, size: s.fontSize, weight: s.fontWeight, height: s.lineHeight, color: s.color };
-    }));
+    result.push(
+      await button.evaluate((node) => {
+        const s = getComputedStyle(node);
+        return {
+          family: s.fontFamily,
+          size: s.fontSize,
+          weight: s.fontWeight,
+          height: s.lineHeight,
+          color: s.color,
+        };
+      }),
+    );
   }
   return result;
 }
 async function headingGeometry(page: Page) {
   const result = [];
   for (const name of ['Shortcuts', 'Direct messages', 'Spaces']) {
-    result.push(await sidebar(page).getByRole('button', { name, exact: true }).evaluate(node => {
-      const icon = node.querySelector('svg')!.getBoundingClientRect();
-      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
-      let text: Node | null;
-      while ((text = walker.nextNode()) && !text.textContent?.trim()) { /* Skip formatting whitespace. */ }
-      if (!text) throw new Error('Disclosure label is missing');
-      const range = document.createRange(); range.selectNodeContents(text);
-      const label = range.getBoundingClientRect();
-      return { iconX: icon.x, iconWidth: icon.width, labelX: label.x, gap: label.x - icon.right };
-    }));
+    result.push(
+      await sidebar(page)
+        .getByRole('button', { name, exact: true })
+        .evaluate((node) => {
+          const icon = node.querySelector('svg')!.getBoundingClientRect();
+          const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+          let text: Node | null;
+          while ((text = walker.nextNode()) && !text.textContent?.trim()) {
+            /* Skip formatting whitespace. */
+          }
+          if (!text) throw new Error('Disclosure label is missing');
+          const range = document.createRange();
+          range.selectNodeContents(text);
+          const label = range.getBoundingClientRect();
+          return {
+            iconX: icon.x,
+            iconWidth: icon.width,
+            labelX: label.x,
+            gap: label.x - icon.right,
+          };
+        }),
+    );
   }
   return result;
 }
 async function capture(page: Page, info: TestInfo, kind: string, region: Locator) {
-  const folder = evidenceDirectory(info, info.project.name); mkdirSync(folder, { recursive: true });
+  const folder = evidenceDirectory(info, info.project.name);
+  mkdirSync(folder, { recursive: true });
   const prefix = `${page.viewportSize()!.width}-${await page.locator('html').getAttribute('data-theme')}-${kind}`;
-  const header = await region.locator('header').first().evaluate(node => {
-    const box = (e: Element) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right }; };
-    const s = getComputedStyle(node);
-    return { ...box(node), paddingLeft: s.paddingLeft, paddingRight: s.paddingRight,
-      avatar: box(node.querySelector('.avatar,.space-avatar')!),
-      title: [...node.querySelectorAll('button')].map(e => ({ text: e.textContent, ...box(e) })) };
-  });
-  writeFileSync(resolve(folder, prefix + '.json'), JSON.stringify({ header, headings: await headings(page), headingGeometry: await headingGeometry(page) }, null, 2) + '\n');
+  const header = await region
+    .locator('header')
+    .first()
+    .evaluate((node) => {
+      const box = (e: Element) => {
+        const r = e.getBoundingClientRect();
+        return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right };
+      };
+      const s = getComputedStyle(node);
+      return {
+        ...box(node),
+        paddingLeft: s.paddingLeft,
+        paddingRight: s.paddingRight,
+        avatar: box(node.querySelector('.avatar,.space-avatar')!),
+        title: [...node.querySelectorAll('button')].map((e) => ({
+          text: e.textContent,
+          ...box(e),
+        })),
+      };
+    });
+  writeFileSync(
+    resolve(folder, prefix + '.json'),
+    JSON.stringify(
+      { header, headings: await headings(page), headingGeometry: await headingGeometry(page) },
+      null,
+      2,
+    ) + '\n',
+  );
   await page.screenshot({ path: resolve(folder, prefix + '.png') });
 }
 
-for (const width of [1024, 1440, 3440]) for (const theme of ['light', 'dark'] as const) test.describe(`header/sidebar ${width}px ${theme}`, () => {
-  test.use({ viewport: { width, height: 960 } });
-  test('full and preview kinds retain their controls with coherent geometry', async ({ page }, info) => {
-    await fixture(page, theme);
-    await sidebar(page).getByRole('button', { name: 'Design team', exact: true }).click();
-    await expect(full(page)).toHaveCount(1);
-    await expect(full(page).locator('header > .space-avatar')).toHaveCount(1);
-    await capture(page, info, 'full-space', full(page));
-    if (width >= 1200) {
-      await page.getByRole('navigation').getByRole('button', { name: 'Home', exact: true }).click();
-      await page.locator('.home-view .conversation-row').filter({ hasText: 'Design team' }).click();
-      await expect(preview(page)).toHaveCount(1);
-      await expect(preview(page).locator('header > .space-avatar')).toHaveCount(1);
-      await capture(page, info, 'preview-space', preview(page));
-      const avatar = (await preview(page).locator('header > .space-avatar').boundingBox())!;
-      expect(avatar.width, 'space preview avatar matches compact DM24px').toBe(24);
-      expect(avatar.height).toBe(24);
-      await hit(preview(page).getByRole('button', { name: 'Expand conversation', exact: true }));
-      await preview(page).getByRole('button', { name: 'Expand conversation', exact: true }).click();
-    }
-    const values = await headings(page);
-    for (const value of values) expect(value).toEqual(values[0]);
-    expect(values[0].family).toContain('Google Sans');
-    expect(values[0].size).toBe('12px'); expect(values[0].weight).toBe('500'); expect(values[0].height).toBe('24px');
-    const origins = await headingGeometry(page);
-    for (const origin of origins) {
-      expect(origin.iconWidth).toBe(17);
-      expect(origin.gap).toBe(8);
-      expect(Math.abs(origin.iconX - origins[0].iconX)).toBeLessThanOrEqual(1);
-      expect(Math.abs(origin.labelX - origins[0].labelX)).toBeLessThanOrEqual(1);
-    }
-    for (const name of ['Design team', 'Weekend plans', 'Maya Chen']) {
-      await sidebar(page).getByRole('button', { name, exact: true }).click();
-      await expect(full(page)).toHaveCount(1);
-      await expect(preview(page)).toHaveCount(0);
-      const header = full(page).locator('.conversation-header');
-      await expect(header).toHaveCSS('padding-left', '24px'); await expect(header).toHaveCSS('padding-right', '24px');
-      const avatar = (await header.locator(':scope > .avatar,:scope > .space-avatar').boundingBox())!;
-      expect(avatar.width).toBe(40); expect(avatar.height).toBe(40);
-      await expect(full(page).locator('.conversation-tabs > .current')).toHaveText('Chat');
-      await expect(full(page).getByRole('button', { name: /^Shared/ })).toHaveCount(1);
-      await expect(header.locator('.conversation-title small')).not.toHaveText('');
-      await hit(header.getByRole('button', { name: 'Conversation details', exact: true }));
-      await capture(page, info, 'full-' + name.replaceAll(' ', '-'), full(page));
-    }
-    for (const name of ['Shortcuts', 'Direct messages', 'Spaces']) {
-      const disclosure = sidebar(page).getByRole('button', { name, exact: true });
-      await hit(disclosure); await disclosure.click(); await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
-      await disclosure.click(); await expect(disclosure).toHaveAttribute('aria-expanded', 'true');
-    }
-  });
-});
+for (const width of [1024, 1440, 3440])
+  for (const theme of ['light', 'dark'] as const)
+    test.describe(`header/sidebar ${width}px ${theme}`, () => {
+      test.use({ viewport: { width, height: 960 } });
+      test('full and preview kinds retain their controls with coherent geometry', async ({
+        page,
+      }, info) => {
+        await fixture(page, theme);
+        await sidebar(page).getByRole('button', { name: 'Design team', exact: true }).click();
+        await expect(full(page)).toHaveCount(1);
+        await expect(full(page).locator('header > .space-avatar')).toHaveCount(1);
+        await capture(page, info, 'full-space', full(page));
+        if (width >= 1200) {
+          await page
+            .getByRole('navigation')
+            .getByRole('button', { name: 'Home', exact: true })
+            .click();
+          await page
+            .locator('.home-view .conversation-row')
+            .filter({ hasText: 'Design team' })
+            .click();
+          await expect(preview(page)).toHaveCount(1);
+          await expect(preview(page).locator('header > .space-avatar')).toHaveCount(1);
+          await capture(page, info, 'preview-space', preview(page));
+          const avatar = (await preview(page).locator('header > .space-avatar').boundingBox())!;
+          expect(avatar.width, 'space preview avatar matches compact DM24px').toBe(24);
+          expect(avatar.height).toBe(24);
+          await hit(
+            preview(page).getByRole('button', { name: 'Expand conversation', exact: true }),
+          );
+          await preview(page)
+            .getByRole('button', { name: 'Expand conversation', exact: true })
+            .click();
+        }
+        const values = await headings(page);
+        for (const value of values) expect(value).toEqual(values[0]);
+        expect(values[0].family).toContain('Google Sans');
+        expect(values[0].size).toBe('12px');
+        expect(values[0].weight).toBe('500');
+        expect(values[0].height).toBe('24px');
+        const origins = await headingGeometry(page);
+        for (const origin of origins) {
+          expect(origin.iconWidth).toBe(17);
+          expect(origin.gap).toBe(8);
+          expect(Math.abs(origin.iconX - origins[0].iconX)).toBeLessThanOrEqual(1);
+          expect(Math.abs(origin.labelX - origins[0].labelX)).toBeLessThanOrEqual(1);
+        }
+        for (const name of ['Design team', 'Weekend plans', 'Maya Chen']) {
+          await sidebar(page).getByRole('button', { name, exact: true }).click();
+          await expect(full(page)).toHaveCount(1);
+          await expect(preview(page)).toHaveCount(0);
+          const header = full(page).locator('.conversation-header');
+          await expect(header).toHaveCSS('padding-left', '24px');
+          await expect(header).toHaveCSS('padding-right', '24px');
+          const avatar = (await header
+            .locator(':scope > .avatar,:scope > .space-avatar')
+            .boundingBox())!;
+          expect(avatar.width).toBe(40);
+          expect(avatar.height).toBe(40);
+          await expect(full(page).locator('.conversation-tabs > .current')).toHaveText('Chat');
+          await expect(full(page).getByRole('button', { name: /^Shared/ })).toHaveCount(1);
+          await expect(header.locator('.conversation-title small')).not.toHaveText('');
+          await hit(header.getByRole('button', { name: 'Conversation details', exact: true }));
+          await capture(page, info, 'full-' + name.replaceAll(' ', '-'), full(page));
+        }
+        for (const name of ['Shortcuts', 'Direct messages', 'Spaces']) {
+          const disclosure = sidebar(page).getByRole('button', { name, exact: true });
+          await hit(disclosure);
+          await disclosure.click();
+          await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+          await disclosure.click();
+          await expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+        }
+      });
+    });
 
 test.describe('coarse desktop headings', () => {
   test.use({ viewport: { width: 1440, height: 960 }, hasTouch: true, isMobile: true });
@@ -132,18 +208,24 @@ test.describe('coarse desktop headings', () => {
     await fixture(page, 'dark');
     for (const name of ['Shortcuts', 'Direct messages', 'Spaces']) {
       const control = sidebar(page).getByRole('button', { name, exact: true });
-      const bounds = await hit(control); expect(bounds.width).toBeGreaterThanOrEqual(44); expect(bounds.height).toBeGreaterThanOrEqual(44);
+      const bounds = await hit(control);
+      expect(bounds.width).toBeGreaterThanOrEqual(44);
+      expect(bounds.height).toBeGreaterThanOrEqual(44);
     }
     await sidebar(page).getByRole('button', { name: 'Design team', exact: true }).click();
-    await expect(full(page)).toHaveCount(1); await expect(preview(page)).toHaveCount(0);
-    const bounds = await hit(full(page).getByRole('button', { name: 'Conversation details', exact: true }));
-    expect(bounds.width).toBeGreaterThanOrEqual(44); expect(bounds.height).toBeGreaterThanOrEqual(44);
+    await expect(full(page)).toHaveCount(1);
+    await expect(preview(page)).toHaveCount(0);
+    const bounds = await hit(
+      full(page).getByRole('button', { name: 'Conversation details', exact: true }),
+    );
+    expect(bounds.width).toBeGreaterThanOrEqual(44);
+    expect(bounds.height).toBeGreaterThanOrEqual(44);
   });
 });
 
 async function focusMetrics(control: Locator) {
   await expect(control).toHaveCount(1);
-  return control.evaluate(node => {
+  return control.evaluate((node) => {
     const box = (element: Element) => {
       const r = element.getBoundingClientRect();
       return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom };
@@ -154,10 +236,23 @@ async function focusMetrics(control: Locator) {
     const outside = Math.max(0, width + offset);
     const row = box(node);
     return {
-      row, icon: box(node.querySelector(':scope > svg,:scope > .avatar,:scope > .space-avatar')!), label: box(node.querySelector(':scope > span')!),
-      font: { family: css.fontFamily, size: css.fontSize, weight: css.fontWeight, line: css.lineHeight },
-      focus: node.matches(':focus-visible'), outline: { width, offset, style: css.outlineStyle, outside },
-      paint: { x: row.x - outside, y: row.y - outside, right: row.right + outside, bottom: row.bottom + outside },
+      row,
+      icon: box(node.querySelector(':scope > svg,:scope > .avatar,:scope > .space-avatar')!),
+      label: box(node.querySelector(':scope > span')!),
+      font: {
+        family: css.fontFamily,
+        size: css.fontSize,
+        weight: css.fontWeight,
+        line: css.lineHeight,
+      },
+      focus: node.matches(':focus-visible'),
+      outline: { width, offset, style: css.outlineStyle, outside },
+      paint: {
+        x: row.x - outside,
+        y: row.y - outside,
+        right: row.right + outside,
+        bottom: row.bottom + outside,
+      },
     };
   });
 }
@@ -168,72 +263,99 @@ async function keyboardFocusMentions(page: Page) {
   await sidebar(page).getByRole('button', { name: 'Starred', exact: true }).focus();
   // WebKit's macOS default skips buttons on plain Tab; Option+Tab includes
   // every focusable control. Both paths still require real keyboard traversal.
-  await page.keyboard.press(page.context().browser()?.browserType().name() === 'webkit' ? 'Alt+Shift+Tab' : 'Shift+Tab');
+  await page.keyboard.press(
+    page.context().browser()?.browserType().name() === 'webkit' ? 'Alt+Shift+Tab' : 'Shift+Tab',
+  );
   const mentions = sidebar(page).getByRole('button', { name: 'Mentions', exact: true });
   await expect(mentions).toBeFocused();
-  await expect.poll(() => mentions.evaluate(node => node.matches(':focus-visible'))).toBe(true);
+  await expect.poll(() => mentions.evaluate((node) => node.matches(':focus-visible'))).toBe(true);
   return mentions;
 }
 
-for (const theme of ['light', 'dark'] as const) for (const collapsed of [false, true]) {
-  test(`selected Mentions ${theme} ${collapsed ? 'collapsed' : 'expanded'} keeps focus paint inside its row`, async ({ page }, info) => {
-    await fixture(page, theme);
-    if (collapsed) await page.getByRole('button', { name: 'Main menu', exact: true }).click();
-    const mentions = sidebar(page).getByRole('button', { name: 'Mentions', exact: true });
-    await mentions.click();
-    await expect(mentions).toHaveClass(/selected/);
-    await expect(page.getByRole('main').getByRole('heading', { name: 'Mentions', exact: true })).toBeVisible();
-    await mentions.evaluate(node => (node as HTMLElement).blur());
-    const nav = sidebar(page).locator('nav');
-    await expect(nav).toHaveCount(1);
-    const folder = evidenceDirectory(info, info.project.name); mkdirSync(folder, { recursive: true });
-    const prefix = `mentions-${theme}-${collapsed ? 'collapsed' : 'expanded'}`;
-    await nav.screenshot({ path: resolve(folder, `${prefix}-unfocused.png`) });
-    const unfocused = await focusMetrics(mentions);
-    expect(unfocused.focus).toBe(false);
-    const focusedControl = await keyboardFocusMentions(page);
-    const focused = await focusMetrics(focusedControl);
-    await nav.screenshot({ path: resolve(folder, `${prefix}-focused.png`) });
-    writeFileSync(resolve(folder, `${prefix}.json`), JSON.stringify({ unfocused, focused }, null, 2) + '\n');
+for (const theme of ['light', 'dark'] as const)
+  for (const collapsed of [false, true]) {
+    test(`selected Mentions ${theme} ${collapsed ? 'collapsed' : 'expanded'} keeps focus paint inside its row`, async ({
+      page,
+    }, info) => {
+      await fixture(page, theme);
+      if (collapsed) await page.getByRole('button', { name: 'Main menu', exact: true }).click();
+      const mentions = sidebar(page).getByRole('button', { name: 'Mentions', exact: true });
+      await mentions.click();
+      await expect(mentions).toHaveClass(/selected/);
+      await expect(
+        page.getByRole('main').getByRole('heading', { name: 'Mentions', exact: true }),
+      ).toBeVisible();
+      await mentions.evaluate((node) => (node as HTMLElement).blur());
+      const nav = sidebar(page).locator('nav');
+      await expect(nav).toHaveCount(1);
+      const folder = evidenceDirectory(info, info.project.name);
+      mkdirSync(folder, { recursive: true });
+      const prefix = `mentions-${theme}-${collapsed ? 'collapsed' : 'expanded'}`;
+      await nav.screenshot({ path: resolve(folder, `${prefix}-unfocused.png`) });
+      const unfocused = await focusMetrics(mentions);
+      expect(unfocused.focus).toBe(false);
+      const focusedControl = await keyboardFocusMentions(page);
+      const focused = await focusMetrics(focusedControl);
+      await nav.screenshot({ path: resolve(folder, `${prefix}-focused.png`) });
+      writeFileSync(
+        resolve(folder, `${prefix}.json`),
+        JSON.stringify({ unfocused, focused }, null, 2) + '\n',
+      );
 
-    expect(focused.row).toEqual(unfocused.row);
-    expect(focused.row.height).toBe(collapsed ? 44 : 28);
-    expect(focused.icon.width).toBe(22); expect(focused.icon.height).toBe(22);
-    expect(Math.abs(focused.icon.y + 11 - focused.row.y - focused.row.height / 2)).toBeLessThanOrEqual(0.5);
-    expect(focused.font).toMatchObject({ size: '14px', weight: '400', line: '16px' });
-    expect(focused.font.family).toContain('Google Sans');
-    if (!collapsed) {
-      expect(focused.label.height).toBe(16);
-      expect(Math.abs(focused.label.y + 8 - focused.row.y - focused.row.height / 2)).toBeLessThanOrEqual(0.5);
-      expect(focused.label.x - focused.icon.right).toBe(16);
-    }
-    const home = (await focusMetrics(sidebar(page).getByRole('button', { name: 'Home', exact: true }))).row;
-    const starred = (await focusMetrics(sidebar(page).getByRole('button', { name: 'Starred', exact: true }))).row;
-    expect(focused.row.y - home.bottom).toBe(0); expect(starred.y - focused.row.bottom).toBe(0);
-    expect(focused.outline.style).toBe('solid'); expect(focused.outline.width).toBe(2);
-    expect(focused.outline.outside, 'focus outline cannot paint into adjacent dense shortcut rows').toBe(0);
-    expect(focused.paint.y).toBeGreaterThanOrEqual(home.bottom);
-    expect(focused.paint.bottom).toBeLessThanOrEqual(starred.y);
-    await hit(focusedControl);
+      expect(focused.row).toEqual(unfocused.row);
+      expect(focused.row.height).toBe(collapsed ? 44 : 28);
+      expect(focused.icon.width).toBe(22);
+      expect(focused.icon.height).toBe(22);
+      expect(
+        Math.abs(focused.icon.y + 11 - focused.row.y - focused.row.height / 2),
+      ).toBeLessThanOrEqual(0.5);
+      expect(focused.font).toMatchObject({ size: '14px', weight: '400', line: '16px' });
+      expect(focused.font.family).toContain('Google Sans');
+      if (!collapsed) {
+        expect(focused.label.height).toBe(16);
+        expect(
+          Math.abs(focused.label.y + 8 - focused.row.y - focused.row.height / 2),
+        ).toBeLessThanOrEqual(0.5);
+        expect(focused.label.x - focused.icon.right).toBe(16);
+      }
+      const home = (
+        await focusMetrics(sidebar(page).getByRole('button', { name: 'Home', exact: true }))
+      ).row;
+      const starred = (
+        await focusMetrics(sidebar(page).getByRole('button', { name: 'Starred', exact: true }))
+      ).row;
+      expect(focused.row.y - home.bottom).toBe(0);
+      expect(starred.y - focused.row.bottom).toBe(0);
+      expect(focused.outline.style).toBe('solid');
+      expect(focused.outline.width).toBe(2);
+      expect(
+        focused.outline.outside,
+        'focus outline cannot paint into adjacent dense shortcut rows',
+      ).toBe(0);
+      expect(focused.paint.y).toBeGreaterThanOrEqual(home.bottom);
+      expect(focused.paint.bottom).toBeLessThanOrEqual(starred.y);
+      await hit(focusedControl);
 
-    // These are app-regression snapshots. Selected dark/focused Google parity
-    // remains unmeasured; the28px row comes from historical light Google data.
-    await expect(nav).toHaveScreenshot(`${prefix}-focused.png`);
-    await focusedControl.evaluate(node => (node as HTMLElement).blur());
-    await expect(nav).toHaveScreenshot(`${prefix}-unfocused.png`);
+      // These are app-regression snapshots. Selected dark/focused Google parity
+      // remains unmeasured; the28px row comes from historical light Google data.
+      await expect(nav).toHaveScreenshot(`${prefix}-focused.png`);
+      await focusedControl.evaluate((node) => (node as HTMLElement).blur());
+      await expect(nav).toHaveScreenshot(`${prefix}-unfocused.png`);
 
-    // The same inset contract must cover conversation rows, including the
-    // first row in a group, where an exterior ring could touch its heading.
-    if (!collapsed) {
-      const conversation = sidebar(page).getByRole('button', { name: 'Maya Chen', exact: true });
-      await conversation.focus();
-      const peerFocus = await focusMetrics(conversation);
-      expect(peerFocus.focus).toBe(true); expect(peerFocus.outline.width).toBe(2);
-      expect(peerFocus.outline.outside).toBe(0); expect(peerFocus.row.height).toBe(28);
-      await hit(conversation);
-    }
-  });
-}
+      // The same inset contract must cover conversation rows, including the
+      // first row in a group, where an exterior ring could touch its heading.
+      if (!collapsed) {
+        const conversation = sidebar(page).getByRole('button', { name: 'Maya Chen', exact: true });
+        await conversation.focus();
+        const peerFocus = await focusMetrics(conversation);
+        expect(peerFocus.focus).toBe(true);
+        expect(peerFocus.outline.width).toBe(2);
+        expect(peerFocus.outline.outside).toBe(0);
+        expect(peerFocus.row.height).toBe(28);
+        await hit(conversation);
+      }
+    });
+  }
 
 test.describe('coarse sidebar focus', () => {
   test.use({ viewport: { width: 1440, height: 960 }, hasTouch: true, isMobile: true });
@@ -246,7 +368,8 @@ test.describe('coarse sidebar focus', () => {
     const conversation = sidebar(page).getByRole('button', { name: 'Maya Chen', exact: true });
     await conversation.focus();
     const peer = await focusMetrics(conversation);
-    expect(peer.focus).toBe(true); expect(peer.row.height).toBeGreaterThanOrEqual(44);
+    expect(peer.focus).toBe(true);
+    expect(peer.row.height).toBeGreaterThanOrEqual(44);
     expect(peer.outline.outside).toBe(0);
     await hit(conversation);
   });

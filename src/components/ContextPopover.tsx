@@ -1,29 +1,23 @@
-"use client";
+'use client';
 
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import { X } from "lucide-react";
-import styles from "./ContextPopover.module.css";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { X } from 'lucide-react';
+import styles from './ContextPopover.module.css';
 
 export default function ContextPopover({
   title,
   children,
   anchor,
   onClose,
-  variant = "menu",
+  variant = 'menu',
   hideHeader = false,
-  className = "",
+  className = '',
 }: {
   title: string;
   children: ReactNode;
   anchor?: HTMLElement | null;
   onClose: () => void;
-  variant?: "menu" | "form" | "emoji" | "message";
+  variant?: 'menu' | 'form' | 'emoji' | 'message';
   hideHeader?: boolean;
   className?: string;
 }) {
@@ -36,7 +30,9 @@ export default function ContextPopover({
     maxHeight: number;
   } | null>(null);
   const positioned = position !== null;
-  useLayoutEffect(() => { close.current = onClose; }, [onClose]);
+  useLayoutEffect(() => {
+    close.current = onClose;
+  }, [onClose]);
   useLayoutEffect(() => {
     const place = () => {
       const element = panel.current;
@@ -51,7 +47,7 @@ export default function ContextPopover({
       const maxHeight = Math.max(80, height - 24);
       const panelHeight = Math.min(box.height, maxHeight);
       const desiredLeft = rect
-        ? variant === "form"
+        ? variant === 'form'
           ? rect.right + 8
           : rect.right - box.width
         : leftEdge + width - box.width - 12;
@@ -59,27 +55,24 @@ export default function ContextPopover({
         leftEdge + 12,
         Math.min(desiredLeft, leftEdge + width - box.width - 12),
       );
-      const below = rect
-        ? variant === "form"
-          ? rect.top
-          : rect.bottom + 8
-        : topEdge + 12;
+      const below = rect ? (variant === 'form' ? rect.top : rect.bottom + 8) : topEdge + 12;
       const top = Math.max(
         topEdge + 12,
         Math.min(
-          below + panelHeight > topEdge + height - 12 && rect
-            ? rect.top - panelHeight - 8
-            : below,
+          below + panelHeight > topEdge + height - 12 && rect ? rect.top - panelHeight - 8 : below,
           topEdge + height - panelHeight - 12,
         ),
       );
-      setPosition(previous => previous?.left === left && previous.top === top && previous.maxHeight === maxHeight
-        ? previous : { left, top, maxHeight });
+      setPosition((previous) =>
+        previous?.left === left && previous.top === top && previous.maxHeight === maxHeight
+          ? previous
+          : { left, top, maxHeight },
+      );
     };
     place();
-    window.addEventListener("resize", place);
-    window.visualViewport?.addEventListener("resize", place);
-    window.visualViewport?.addEventListener("scroll", place);
+    window.addEventListener('resize', place);
+    window.visualViewport?.addEventListener('resize', place);
+    window.visualViewport?.addEventListener('scroll', place);
     const observer = new ResizeObserver(place);
     if (panel.current) observer.observe(panel.current);
     // An image, edited message or font can move an opener without resizing it
@@ -88,9 +81,18 @@ export default function ContextPopover({
     let previousAnchor = anchor?.getBoundingClientRect();
     const followAnchor = () => {
       if (!anchor) return;
-      if (!anchor.isConnected) { close.current(); return; }
+      if (!anchor.isConnected) {
+        close.current();
+        return;
+      }
       const rect = anchor.getBoundingClientRect();
-      if (!previousAnchor || rect.x !== previousAnchor.x || rect.y !== previousAnchor.y || rect.width !== previousAnchor.width || rect.height !== previousAnchor.height) {
+      if (
+        !previousAnchor ||
+        rect.x !== previousAnchor.x ||
+        rect.y !== previousAnchor.y ||
+        rect.width !== previousAnchor.width ||
+        rect.height !== previousAnchor.height
+      ) {
         previousAnchor = rect;
         place();
       }
@@ -100,9 +102,9 @@ export default function ContextPopover({
     return () => {
       window.cancelAnimationFrame(frame);
       observer.disconnect();
-      window.removeEventListener("resize", place);
-      window.visualViewport?.removeEventListener("resize", place);
-      window.visualViewport?.removeEventListener("scroll", place);
+      window.removeEventListener('resize', place);
+      window.visualViewport?.removeEventListener('resize', place);
+      window.visualViewport?.removeEventListener('scroll', place);
     };
   }, [anchor, title, variant]);
   useEffect(() => {
@@ -111,8 +113,8 @@ export default function ContextPopover({
     if (!positioned) return;
     restoreFocus.current = true;
     (
-      panel.current?.querySelector<HTMLInputElement>("input") ||
-      panel.current?.querySelector<HTMLButtonElement>("button:not([disabled])")
+      panel.current?.querySelector<HTMLInputElement>('input') ||
+      panel.current?.querySelector<HTMLButtonElement>('button:not([disabled])')
     )?.focus({ preventScroll: true });
     const outside = (event: Event) => {
       if (
@@ -126,64 +128,54 @@ export default function ContextPopover({
     };
     const keyboard = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
-      if (event.key === "Escape") {
+      if (event.key === 'Escape') {
         event.preventDefault();
         onClose();
       }
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        if (
-          document.activeElement?.matches(
-            "input, textarea, [role=combobox], [role=option]",
-          )
-        )
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (document.activeElement?.matches('input, textarea, [role=combobox], [role=option]'))
           return;
         const buttons = [
-          ...(panel.current?.querySelectorAll<HTMLButtonElement>(
-            "button:not([disabled])",
-          ) || []),
+          ...(panel.current?.querySelectorAll<HTMLButtonElement>('button:not([disabled])') || []),
         ];
-        const current = buttons.indexOf(
-          document.activeElement as HTMLButtonElement,
-        );
+        const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
         if (current >= 0) {
           event.preventDefault();
           buttons[
-            (current + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) %
-              buttons.length
+            (current + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
           ]?.focus();
         }
       }
     };
-    document.addEventListener("pointerdown", outside, true);
-    document.addEventListener("focusin", outside, true);
-    document.addEventListener("wheel", outside, {
+    document.addEventListener('pointerdown', outside, true);
+    document.addEventListener('focusin', outside, true);
+    document.addEventListener('wheel', outside, {
       capture: true,
       passive: true,
     });
-    document.addEventListener("touchmove", outside, {
+    document.addEventListener('touchmove', outside, {
       capture: true,
       passive: true,
     });
-    document.addEventListener("keydown", keyboard);
+    document.addEventListener('keydown', keyboard);
     return () => {
-      document.removeEventListener("pointerdown", outside, true);
-      document.removeEventListener("focusin", outside, true);
-      document.removeEventListener("wheel", outside, true);
-      document.removeEventListener("touchmove", outside, true);
-      document.removeEventListener("keydown", keyboard);
-      if (restoreFocus.current && anchor?.isConnected)
-        anchor.focus({ preventScroll: true });
+      document.removeEventListener('pointerdown', outside, true);
+      document.removeEventListener('focusin', outside, true);
+      document.removeEventListener('wheel', outside, true);
+      document.removeEventListener('touchmove', outside, true);
+      document.removeEventListener('keydown', keyboard);
+      if (restoreFocus.current && anchor?.isConnected) anchor.focus({ preventScroll: true });
     };
   }, [anchor, onClose, title, positioned]);
   return (
     <div
       ref={panel}
       data-context-popover
-      className={`${styles.panel} ${variant === "menu" ? "" : styles[variant]} ${className}`}
+      className={`${styles.panel} ${variant === 'menu' ? '' : styles[variant]} ${className}`}
       role="dialog"
       aria-modal="false"
       aria-label={title}
-      style={position ? { ...position } : { visibility: "hidden" }}
+      style={position ? { ...position } : { visibility: 'hidden' }}
     >
       {!hideHeader && (
         <div className={styles.header}>

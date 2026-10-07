@@ -1,0 +1,8 @@
+{
+  "all": true,
+  "include": ["src/**/*.{ts,tsx}", "public/**/*.js", "scripts/verify-database.ts"],
+  "exclude": ["**/*.d.ts"],
+  "extension": [".ts", ".tsx", ".js"],
+  "reporter": ["text", "json", "json-summary", "html"],
+  "reports-dir": "test-results/coverage"
+}

@@ -1,17 +1,17 @@
-"use client";
+'use client';
 
-import { useEffect, useRef, useState } from "react";
-import { ArrowDownToLine, LoaderCircle, Pause, Play } from "lucide-react";
-import { audioDataUrlBytes } from "@/lib/audio-bytes";
-import styles from "./AudioPlayer.module.css";
+import { useEffect, useRef, useState } from 'react';
+import { ArrowDownToLine, LoaderCircle, Pause, Play } from 'lucide-react';
+import { audioDataUrlBytes } from '@/lib/audio-bytes';
+import styles from './AudioPlayer.module.css';
 
 const timestamp = (seconds: number) =>
-  `${Math.floor(Math.max(0, seconds) / 60)}:${String(Math.floor(Math.max(0, seconds) % 60)).padStart(2, "0")}`;
-const PLAY_EVENT = "chat-audio-player-play";
+  `${Math.floor(Math.max(0, seconds) / 60)}:${String(Math.floor(Math.max(0, seconds) % 60)).padStart(2, '0')}`;
+const PLAY_EVENT = 'chat-audio-player-play';
 
 /** Message players and native draft/recording previews share one playback lane. */
 export function announceAudioPlayback(active: HTMLAudioElement) {
-  document.querySelectorAll("audio").forEach((element) => {
+  document.querySelectorAll('audio').forEach((element) => {
     if (element !== active) element.pause();
   });
   document.dispatchEvent(new CustomEvent(PLAY_EVENT, { detail: active }));
@@ -37,7 +37,7 @@ export default function AudioPlayer({
   const [elapsed, setElapsed] = useState(0);
   const [rate, setRate] = useState(1);
   const [peaks, setPeaks] = useState<number[]>([]);
-  const [error, setError] = useState("");
+  const [error, setError] = useState('');
   useEffect(() => {
     alive.current = true;
     generation.current += 1;
@@ -48,10 +48,9 @@ export default function AudioPlayer({
     setElapsed(0);
     setRate(1);
     setPeaks([]);
-    setError("");
+    setError('');
     const pauseOther = (event: Event) => {
-      if ((event as CustomEvent).detail !== audio.current)
-        audio.current?.pause();
+      if ((event as CustomEvent).detail !== audio.current) audio.current?.pause();
     };
     document.addEventListener(PLAY_EVENT, pauseOther);
     return () => {
@@ -68,7 +67,7 @@ export default function AudioPlayer({
       duration > 120 ||
       size > 5 * 1024 * 1024 ||
       !/^(blob:|data:audio\/)/.test(src) ||
-      typeof OfflineAudioContext === "undefined"
+      typeof OfflineAudioContext === 'undefined'
     )
       return;
     let cancelled = false;
@@ -77,7 +76,7 @@ export default function AudioPlayer({
     void (async () => {
       try {
         let bytes: ArrayBuffer;
-        if (src.startsWith("data:")) {
+        if (src.startsWith('data:')) {
           // Local draft/demo bytes need no external connection permission.
           const local = audioDataUrlBytes(src);
           if (!local) return;
@@ -97,8 +96,7 @@ export default function AudioPlayer({
           const start = Math.floor((index * samples.length) / bars);
           const end = Math.floor(((index + 1) * samples.length) / bars);
           let sum = 0;
-          for (let offset = start; offset < end; offset++)
-            sum += samples[offset] ** 2;
+          for (let offset = start; offset < end; offset++) sum += samples[offset] ** 2;
           return Math.sqrt(sum / Math.max(1, end - start));
         });
         const maximum = Math.max(...values, 0.001);
@@ -125,24 +123,19 @@ export default function AudioPlayer({
     const ticket = generation.current;
     const requestedSource = src;
     const current = () =>
-      alive.current &&
-      generation.current === ticket &&
-      currentSource.current === requestedSource;
+      alive.current && generation.current === ticket && currentSource.current === requestedSource;
     if (!element || pending) return;
     if (!element.paused) {
       element.pause();
       return;
     }
-    setError("");
+    setError('');
     setPending(true);
     try {
       if (element.ended) element.currentTime = 0;
       await element.play();
     } catch {
-      if (current())
-        setError(
-          "This audio can’t play in this browser. Download it to listen.",
-        );
+      if (current()) setError('This audio can’t play in this browser. Download it to listen.');
     } finally {
       if (current()) setPending(false);
     }
@@ -150,11 +143,7 @@ export default function AudioPlayer({
   const progress = duration ? Math.min(100, (elapsed / duration) * 100) : 0;
   return (
     <div className={styles.wrapper}>
-      <div
-        className={styles.player}
-        role="group"
-        aria-label={`Voice message: ${name}`}
-      >
+      <div className={styles.player} role="group" aria-label={`Voice message: ${name}`}>
         <audio
           ref={audio}
           className={styles.audioNode}
@@ -171,21 +160,18 @@ export default function AudioPlayer({
           onPause={() => setPlaying(false)}
           onEnded={() => {
             setPlaying(false);
-            if (!duration && audio.current?.currentTime)
-              setDuration(audio.current.currentTime);
+            if (!duration && audio.current?.currentTime) setDuration(audio.current.currentTime);
           }}
           onError={() => {
             setPlaying(false);
             setPending(false);
-            setError(
-              "This audio can’t play in this browser. Download it to listen.",
-            );
+            setError('This audio can’t play in this browser. Download it to listen.');
           }}
         />
         <button
           type="button"
           className={styles.play}
-          aria-label={`${playing ? "Pause" : "Play"} voice message`}
+          aria-label={`${playing ? 'Pause' : 'Play'} voice message`}
           disabled={pending}
           onClick={() => void toggle()}
         >
@@ -219,9 +205,7 @@ export default function AudioPlayer({
                       height={height}
                       rx={1}
                       className={
-                        (index / peaks.length) * 100 <= progress
-                          ? styles.playedBar
-                          : styles.bar
+                        (index / peaks.length) * 100 <= progress ? styles.playedBar : styles.bar
                       }
                     />
                   );
@@ -240,7 +224,7 @@ export default function AudioPlayer({
               value={Math.min(elapsed, duration || 0)}
               disabled={!duration}
               aria-label={`Seek ${name}`}
-              aria-valuetext={`${timestamp(elapsed)} of ${duration ? timestamp(duration) : "unknown duration"}`}
+              aria-valuetext={`${timestamp(elapsed)} of ${duration ? timestamp(duration) : 'unknown duration'}`}
               onChange={(event) => {
                 const value = Number(event.target.value);
                 if (audio.current) {
@@ -251,7 +235,7 @@ export default function AudioPlayer({
             />
           </div>
           <span className={styles.time} aria-label="Playback time">
-            {timestamp(elapsed)} / {duration ? timestamp(duration) : "–:–"}
+            {timestamp(elapsed)} / {duration ? timestamp(duration) : '–:–'}
           </span>
         </div>
         <button

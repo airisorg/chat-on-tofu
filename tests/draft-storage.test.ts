@@ -4,7 +4,12 @@ import { restoreDraftMap } from '../src/lib/draft-storage';
 import { MAX_ACTION_BODY_BYTES, MAX_ATTACHMENT_BYTES } from '../src/lib/media-limits';
 
 const conversations = [{ id: 'design' }, { id: 'peer' }];
-const file = { name: 'notes.txt', type: 'text/plain', size: 5, url: 'data:text/plain;base64,aGVsbG8=' };
+const file = {
+  name: 'notes.txt',
+  type: 'text/plain',
+  size: 5,
+  url: 'data:text/plain;base64,aGVsbG8=',
+};
 
 test('invalid JSON and outer shapes restore an empty safe map', () => {
   for (const raw of [null, '', '{', 'null', '12', '"draft"', '[]', '[{"text":"draft"}]']) {
@@ -15,11 +20,17 @@ test('invalid JSON and outer shapes restore an empty safe map', () => {
 });
 
 test('keeps valid member drafts and valid fields while discarding malformed text/media', () => {
-  const map = restoreDraftMap(JSON.stringify({
-    design: { text: 'Keep this thought', attachments: [null, file, { ...file, name: { bad: true } }] },
-    peer: { text: { bad: true }, attachments: 'not an array' },
-    stranger: { text: 'Do not restore another conversation', attachments: [file] },
-  }), conversations);
+  const map = restoreDraftMap(
+    JSON.stringify({
+      design: {
+        text: 'Keep this thought',
+        attachments: [null, file, { ...file, name: { bad: true } }],
+      },
+      peer: { text: { bad: true }, attachments: 'not an array' },
+      stranger: { text: 'Do not restore another conversation', attachments: [file] },
+    }),
+    conversations,
+  );
   assert.deepEqual(map.design, { text: 'Keep this thought', attachments: [file] });
   assert.deepEqual(map.peer, { text: '', attachments: [] });
   assert.equal(map.stranger, undefined);
@@ -37,20 +48,32 @@ test('rejects remote URLs, unsupported active formats and inconsistent base64 me
     { ...file, size: 1.5 },
     { ...file, name: 'x'.repeat(121) },
   ]) {
-    const map = restoreDraftMap(JSON.stringify({ design: { text: 'valid', attachments: [malformed] } }), conversations);
+    const map = restoreDraftMap(
+      JSON.stringify({ design: { text: 'valid', attachments: [malformed] } }),
+      conversations,
+    );
     assert.deepEqual(map.design, { text: 'valid', attachments: [] });
   }
 });
 
 test('bounds restored text, file count and raw storage size', () => {
-  const map = restoreDraftMap(JSON.stringify({ design: { text: 'x'.repeat(6001), attachments: Array(5).fill(file) } }), conversations);
+  const map = restoreDraftMap(
+    JSON.stringify({ design: { text: 'x'.repeat(6001), attachments: Array(5).fill(file) } }),
+    conversations,
+  );
   assert.equal(map.design.text, '');
   assert.equal(map.design.attachments.length, 3);
-  assert.deepEqual(Object.keys(restoreDraftMap(' '.repeat(MAX_ACTION_BODY_BYTES + 1), conversations)), []);
+  assert.deepEqual(
+    Object.keys(restoreDraftMap(' '.repeat(MAX_ACTION_BODY_BYTES + 1), conversations)),
+    [],
+  );
 });
 
 test('restored own prototype-like keys never pollute another object', () => {
-  const map = restoreDraftMap('{"__proto__":{"text":"safe own key","attachments":[]},"constructor":{"text":"safe constructor","attachments":[]}}', [{ id: '__proto__' }, { id: 'constructor' }]);
+  const map = restoreDraftMap(
+    '{"__proto__":{"text":"safe own key","attachments":[]},"constructor":{"text":"safe constructor","attachments":[]}}',
+    [{ id: '__proto__' }, { id: 'constructor' }],
+  );
   assert.equal(Object.getPrototypeOf(map), null);
   assert.equal(map.__proto__.text, 'safe own key');
   assert.equal(Object.getOwnPropertyDescriptor(map, 'constructor')!.value.text, 'safe constructor');
@@ -58,10 +81,16 @@ test('restored own prototype-like keys never pollute another object', () => {
 });
 
 test('restores only a literal omitted-attachment marker, including an empty media-only draft', () => {
-  const marked = restoreDraftMap(JSON.stringify({ design: { text: '', attachments: [], omittedAttachments: true } }), conversations);
+  const marked = restoreDraftMap(
+    JSON.stringify({ design: { text: '', attachments: [], omittedAttachments: true } }),
+    conversations,
+  );
   assert.deepEqual(marked.design, { text: '', attachments: [], omittedAttachments: true });
   for (const omittedAttachments of [false, 'true', 1, {}, null]) {
-    const map = restoreDraftMap(JSON.stringify({ design: { text: 'draft', attachments: [], omittedAttachments } }), conversations);
+    const map = restoreDraftMap(
+      JSON.stringify({ design: { text: 'draft', attachments: [], omittedAttachments } }),
+      conversations,
+    );
     assert.deepEqual(map.design, { text: 'draft', attachments: [] });
   }
 });

@@ -1,8 +1,26 @@
 # Contributing
 
-Use Node.js 22 or newer, run `npm ci`, and start `npm run dev`. The local **Explore demo** preview needs no provider account. Production preview is disabled.
+Use Node.js 22.13 or newer, run `npm ci`, and start `npm run dev`. The local **Explore demo** preview needs no provider account. Production preview is disabled.
 
 Run `npm run typecheck`, `npm run build`, and `npm run test:unit` for server/client changes. Browser tests require a separately running local server; install their engines with `npx playwright install chromium webkit`. All browser configurations default to `http://127.0.0.1:3000`; set `APP_URL` for another local port. Hosted URLs are rejected because these suites use synthetic accounts and fault fixtures. `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` optionally selects your Chromium binary.
+
+Before a pull request, run `npm run format:check`, `npm run lint`, and
+`npm run test:coverage` as well. `npm run format` applies the shared formatting.
+Type checking generates Next.js route declarations first; `next-env.d.ts` and
+`.next/` are generated and must remain untracked. The executable `test:catalog`
+lists fast, SQL, native and browser layers without pretending discovery is execution.
+
+CI runs unit/SQL coverage, lint, formatting, type checks, a production build,
+dependency advisories and selected functional browser tests. A separate security
+workflow scans reachable Git history and JavaScript/TypeScript with CodeQL.
+Native PostgreSQL tests and the complete macOS screenshot gate still require
+their documented local runs. CI never receives production credentials.
+
+ESLint uses current JavaScript/TypeScript recommended rules and React's two
+core Hooks correctness rules. The Next-specific lint bundle is intentionally
+absent: its version-matched dependency tree currently includes an unpatched
+`braces` advisory (GHSA-vfj7-8cjw-p6xm). Revisit that choice when a compatible
+patched release exists; do not use `npm audit fix --force` to downgrade Next.
 
 Use the relevant `test:*` script for the behavior changed. `test:voice` captures a real minute through Chromium's synthetic microphone and takes roughly a minute. The SQL benchmarks use disposable in-process PGlite databases; they do not contact the deployed database. Browser traces and captures default to ignored `test-results/`; `CHAT_EVIDENCE_DIR` optionally exports selected review captures elsewhere.
 

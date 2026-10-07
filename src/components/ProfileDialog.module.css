@@ -130,7 +130,7 @@
   line-height: 24px;
 }
 
-.content .presets > button[aria-pressed="true"] {
+.content .presets > button[aria-pressed='true'] {
   background: var(--selected);
   border-color: var(--selected);
   color: var(--ink);
