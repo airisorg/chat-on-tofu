@@ -36,6 +36,9 @@ import {
   Pencil,
   Pin,
   PictureInPicture2,
+  PanelRight,
+  Maximize2,
+  History,
   Plus,
   Search,
   SendHorizontal,
@@ -57,6 +60,8 @@ import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from "@/lib/media-limits";
 import { restoreDraftMap, type DraftMap } from "@/lib/draft-storage";
 import { draftSavingKey, readDraftSaving, savedDraftsKey, writeDraftSaving } from "@/lib/draft-preference";
 import VoiceRecorder from "./VoiceRecorder";
+import AudioPreview from "./AudioPreview";
+import splitStyles from "./ChatAppSplit.module.css";
 import InstallHelp from "./InstallHelp";
 import ContextPopover from "./ContextPopover";
 import LandingDetails from "./LandingDetails";
@@ -350,6 +355,11 @@ export default function ChatApp() {
     process.env.NEXT_PUBLIC_ENABLE_DEMO === "true";
   const [view, setView] = useState<View>("home");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [homePreview, setHomePreview] = useState(false);
+  const [splitEnabled, setSplitEnabled] = useState(true);
+  const [splitDesktop, setSplitDesktop] = useState(false);
+  const homeRowTrigger = useRef<HTMLButtonElement | null>(null);
+  const splitToggleRef = useRef<HTMLButtonElement>(null);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [unreadOnly, setUnreadOnly] = useState(false);
@@ -436,6 +446,14 @@ export default function ChatApp() {
       touch.removeEventListener("change", update);
     };
   }, []);
+  useEffect(() => {
+    // A split view needs two usable panes; compact/touch layouts stay full-screen.
+    const media = window.matchMedia("(min-width: 1200px) and (min-height: 501px) and (pointer: fine)");
+    const update = () => setSplitDesktop(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
   async function installApp() {
     if (!installPrompt) return;
     try {
@@ -478,6 +496,7 @@ export default function ChatApp() {
       (m) => m.conversationId === selectedId && !m.parentId,
     ) || [];
   const thread = state?.messages.find((m) => m.id === threadId);
+  const previewActive = !!selected && homePreview && splitEnabled && splitDesktop && !thread;
   const replies = state?.messages.filter((m) => m.parentId === threadId) || [];
   const sectionNames = [
     ...new Set(
@@ -545,6 +564,12 @@ export default function ChatApp() {
       } catch {}
     }
     previousUser.current = userId;
+    setHomePreview(false);
+    let split = true;
+    if (userId) {
+      try { split = localStorage.getItem(`relay-home-split:${userId}`) !== "off"; } catch {}
+    }
+    setSplitEnabled(split);
     draftOwner.current = userId;
     let enabled = true;
     if (userId) {
@@ -594,7 +619,7 @@ export default function ChatApp() {
       const invitedConversation = state.conversations.find(
         (c) => c.id === invitation,
       );
-      if (invitedConversation || !isCompactViewport()) {
+      if (invitedConversation || (chat.demo && !isCompactViewport())) {
         const initial =
           invitedConversation ||
           (chat.demo
@@ -773,7 +798,7 @@ export default function ChatApp() {
       input.style.height = "auto";
       input.style.height = `${Math.min(input.scrollHeight, isCompactViewport() ? 110 : 140)}px`;
     }
-  }, [draft, selectedId]);
+  }, [draft, selectedId, previewActive, compactViewport]);
   useEffect(() => {
     const input = threadComposerRef.current;
     if (input) {
@@ -885,6 +910,7 @@ export default function ChatApp() {
     void act(action, success).catch(() => {});
   }
   function openConversation(conversation: Conversation) {
+    setHomePreview(false);
     setSelectedId(conversation.id);
     setThreadId(null);
     setDraft(draftMap.current[conversation.id]?.text || "");
@@ -894,6 +920,48 @@ export default function ChatApp() {
     setSearchFilters(DEFAULT_SEARCH_FILTERS);
     if (conversation.unread)
       run({ type: "read", conversationId: conversation.id });
+  }
+  function openHomeConversation(conversation: Conversation, trigger: HTMLButtonElement) {
+    openConversation(conversation);
+    if (view === "home" && splitEnabled && splitDesktop) {
+      homeRowTrigger.current = trigger;
+      setHomePreview(true);
+    }
+  }
+  function expandPreview() {
+    const scroller = scrollRef.current;
+    const top = scroller?.getBoundingClientRect().top || 0;
+    const anchor = scroller && !atBottom.current
+      ? [...scroller.querySelectorAll<HTMLElement>("article")].find(row => row.getBoundingClientRect().bottom > top)
+      : undefined;
+    const offset = anchor ? anchor.getBoundingClientRect().top - top : 0;
+    setHomePreview(false);
+    requestAnimationFrame(() => {
+      // Changing pane width and intro height must not move the reader to a
+      // different older message. The section and article nodes stay mounted.
+      if (scroller && anchor?.isConnected)
+        scroller.scrollTop += anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top - offset;
+      composerRef.current?.focus({ preventScroll: true });
+    });
+  }
+  function closePreview() {
+    setSelectedId(null);
+    setThreadId(null);
+    setHomePreview(false);
+    requestAnimationFrame(() => {
+      const trigger = homeRowTrigger.current;
+      if (trigger?.isConnected) trigger.focus();
+      else splitToggleRef.current?.focus();
+    });
+  }
+  function toggleSplit() {
+    const enabled = !splitEnabled;
+    setSplitEnabled(enabled);
+    if (state) {
+      try { localStorage.setItem(`relay-home-split:${state.user.id}`, enabled ? "on" : "off"); } catch {}
+    }
+    // Turning off a preview leaves Home open; its draft remains in the draft map.
+    if (!enabled && homePreview) closePreview();
   }
   function closeMini() {
     miniIdRef.current = null;
@@ -988,6 +1056,7 @@ export default function ChatApp() {
     else if (miniId && !miniDesktop) expandMini();
   }, [miniId, miniDesktop, miniConversation?.id]);
   function navigate(next: View) {
+    setHomePreview(false);
     setView(next);
     setSelectedId(null);
     setThreadId(null);
@@ -1696,7 +1765,7 @@ export default function ChatApp() {
               )}
               <span className="draft-attachment-name" title={f.name}>{f.name}</span>
               {f.type.startsWith("audio/") && (
-                <audio
+                <AudioPreview
                   className="draft-audio"
                   controls
                   src={f.url}
@@ -1749,6 +1818,7 @@ export default function ChatApp() {
                 <Mic size={21} />
               </IconButton>
               <IconButton
+                className="composer-attach"
                 label="Attach files (up to 5 MB each)"
                 onClick={() => fileRef.current?.click()}
               >
@@ -1793,443 +1863,7 @@ export default function ChatApp() {
     </div>
   );
 
-  return (
-    <div
-      className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${selected ? "conversation-open" : ""} ${thread ? "thread-open" : ""}`}
-      onClickCapture={(event) => {
-        // Safari does not focus clicked buttons by default. Establish the
-        // trigger before opening a dialog so Escape restores a useful target.
-        const button =
-          event.target instanceof Element
-            ? event.target.closest("button")
-            : null;
-        if (button && !button.closest("[role=dialog]"))
-          menuAnchor.current = button;
-        button?.focus({ preventScroll: true });
-      }}
-    >
-      <a href="#main-content" className="skip-link">
-        Skip to conversation
-      </a>
-      <aside className="app-rail" aria-label="App shortcuts">
-        <IconButton
-          label="Main menu"
-          expanded={!sidebarCollapsed}
-          controls="chat-navigation"
-          onClick={() => setSidebarCollapsed((value) => !value)}
-        >
-          <Menu size={24} />
-        </IconButton>
-        <button
-          className="rail-chat"
-          onClick={() => navigate("home")}
-          aria-label="Chat"
-        >
-          <MessageCircle size={25} />
-          <small>Chat</small>
-        </button>
-        <div className="rail-bottom">
-          <IconButton
-            label="Add Chat to Home Screen"
-            onClick={() => setModal({ type: "install" })}
-          >
-            <Smartphone size={23} />
-          </IconButton>
-        </div>
-      </aside>
-      <header className="app-topbar">
-        <Brand />
-        <form
-          className="search-box"
-          onSubmit={(e) => {
-            e.preventDefault();
-            setView("search");
-            setSelectedId(null);
-          }}
-        >
-          <Search size={22} />
-          <input
-            ref={searchRef}
-            aria-label="Search in chat"
-            placeholder={
-              searchScope
-                ? `Search ${state.conversations.find((c) => c.id === searchScope)?.name || "conversation"}`
-                : "Search in chat"
-            }
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              if (e.target.value) {
-                setView("search");
-                setSelectedId(null);
-              }
-            }}
-          />
-          {query && (
-            <IconButton
-              label="Clear search"
-              onClick={() => {
-                setQuery("");
-                setSearchScope(null);
-                setSearchFilters(DEFAULT_SEARCH_FILTERS);
-                setView("home");
-              }}
-            >
-              <X size={19} />
-            </IconButton>
-          )}
-          <span className="search-shortcut">⌘ K</span>
-        </form>
-        <div className="topbar-actions">
-          <button
-            className="status-button"
-            onClick={() => setModal({ type: "status" })}
-          >
-            <span
-              className={`status-dot ${state.user.status === "Do not disturb" ? "dnd" : state.user.status === "Away" ? "away" : ""}`}
-            />
-            {state.user.status === "Do not disturb"
-              ? "Do not disturb"
-              : state.user.status === "Away"
-                ? "Away"
-                : "Active"}
-            <ChevronDown size={16} />
-          </button>
-          <IconButton
-            label="Help and installation"
-            onClick={() => setModal({ type: "support" })}
-          >
-            <MaterialHelp />
-          </IconButton>
-          <IconButton
-            label="Settings"
-            onClick={() => setModal({ type: "settings" })}
-          >
-            <MaterialSettings />
-          </IconButton>
-          <button
-            className="account-button"
-            aria-label="Your profile"
-            onClick={() => setModal({ type: "profile" })}
-          >
-            <Avatar person={state.user} size="small" />
-          </button>
-        </div>
-      </header>
-      <aside
-        id="chat-navigation"
-        className="sidebar"
-        aria-label="Chat navigation"
-      >
-        <button
-          className="new-chat-button"
-          onClick={() => setModal({ type: "new", kind: "dm" })}
-        >
-          <MaterialNewChat />
-          New chat
-        </button>
-        <nav>
-          <button
-            className="sidebar-shortcuts-heading"
-            aria-expanded={shortcutsExpanded}
-            aria-controls="shortcut-navigation-items"
-            onClick={() => setShortcutsExpanded((value) => !value)}
-          >
-            {shortcutsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-            <span>Shortcuts</span>
-          </button>
-          <div id="shortcut-navigation-items" hidden={!shortcutsExpanded && !sidebarCollapsed}>
-          {navItems.map((item) => (
-            <button
-              key={item.view}
-              aria-label={item.label}
-              className={`nav-item ${!selected && view === item.view ? "selected" : ""}`}
-              onClick={() => navigate(item.view)}
-            >
-              {item.icon}
-              <span>{item.label}</span>
-              {!!item.count && <span className="nav-count">{item.count}</span>}
-            </button>
-          ))}
-          </div>
-        </nav>
-        <div className="sidebar-group">
-          <div className="sidebar-group-heading">
-            <button
-              aria-expanded={directExpanded}
-              aria-controls="direct-conversations"
-              onClick={() => setDirectExpanded((value) => !value)}
-            >
-              {directExpanded ? (
-                <ChevronDown size={17} />
-              ) : (
-                <ChevronRight size={17} />
-              )}
-              Direct messages
-            </button>
-            <IconButton
-              label="New direct message"
-              onClick={() => setModal({ type: "new", kind: "dm" })}
-            >
-              <Plus size={19} />
-            </IconButton>
-          </div>
-          <div id="direct-conversations" hidden={!directExpanded}>
-            {state.conversations
-              .filter((c) => c.kind !== "space" && !c.section)
-              .slice(0, 7)
-              .map((c) => (
-                <button
-                  key={c.id}
-                  aria-label={c.name}
-                  className={`sidebar-conversation ${selectedId === c.id ? "selected" : ""}`}
-                  onClick={() => openConversation(c)}
-                >
-                  <ConversationAvatar
-                    userId={state.user.id}
-                    conversation={c}
-                    small
-                  />
-                  <span className={c.unread ? "unread" : ""}>{c.name}</span>
-                  {c.muted && <BellOff size={13} />}
-                  {!!c.unread && <span className="unread-dot" />}
-                </button>
-              ))}
-          </div>
-        </div>
-        <div className="sidebar-group">
-          <div className="sidebar-group-heading">
-            <button
-              aria-expanded={spacesExpanded}
-              aria-controls="space-conversations"
-              onClick={() => setSpacesExpanded((value) => !value)}
-            >
-              {spacesExpanded ? (
-                <ChevronDown size={17} />
-              ) : (
-                <ChevronRight size={17} />
-              )}
-              Spaces
-            </button>
-            <IconButton
-              label="New space"
-              onClick={() => setModal({ type: "new", kind: "space" })}
-            >
-              <Plus size={19} />
-            </IconButton>
-          </div>
-          <div id="space-conversations" hidden={!spacesExpanded}>
-            {state.conversations
-              .filter((c) => c.kind === "space" && !c.section)
-              .map((c) => (
-                <button
-                  key={c.id}
-                  aria-label={c.name}
-                  className={`sidebar-conversation ${selectedId === c.id ? "selected" : ""}`}
-                  onClick={() => openConversation(c)}
-                >
-                  <ConversationAvatar
-                    userId={state.user.id}
-                    conversation={c}
-                    small
-                  />
-                  <span className={c.unread ? "unread" : ""}>{c.name}</span>
-                  {c.pinned && <Pin size={13} />}
-                  {!!c.unread && <span className="unread-dot" />}
-                </button>
-              ))}
-          </div>
-        </div>
-        {sectionNames.map((section) => (
-          <div className="sidebar-group" key={section}>
-            <div className="sidebar-group-heading">
-              <button onClick={() => navigate("sections")}>
-                <ChevronDown size={17} />
-                {section}
-              </button>
-            </div>
-            {state.conversations
-              .filter((c) => c.section === section)
-              .map((c) => (
-                <button
-                  aria-label={c.name}
-                  className={`sidebar-conversation ${selectedId === c.id ? "selected" : ""}`}
-                  key={c.id}
-                  onClick={() => openConversation(c)}
-                >
-                  <ConversationAvatar
-                    userId={state.user.id}
-                    conversation={c}
-                    small
-                  />
-                  <span>{c.name}</span>
-                </button>
-              ))}
-          </div>
-        ))}
-        <div className="sidebar-footer">
-          {chat.demo && <span className="demo-badge">DEMO WORKSPACE</span>}
-          <span>
-            <span
-              className={`connection-dot ${chat.offline ? "offline" : ""}`}
-            />
-            {chat.offline
-              ? "May be offline"
-              : chat.demo
-                ? "Local preview"
-                : "Signed in"}
-          </span>
-        </div>
-      </aside>
-      <main id="main-content" className="main-panel">
-        {selected ? (
-          <>
-            <header className="conversation-header">
-              <IconButton
-                label="Back to conversations"
-                className="mobile-back"
-                onClick={() => {
-                  setSelectedId(null);
-                  setThreadId(null);
-                }}
-              >
-                <ArrowLeft size={24} />
-              </IconButton>
-              <ConversationAvatar
-                userId={state.user.id}
-                conversation={selected}
-              />
-              <button
-                className="conversation-title"
-                onClick={() =>
-                  setModal({ type: "about", conversation: selected })
-                }
-              >
-                <strong>
-                  {selected.name}
-                  <ChevronDown size={18} />
-                </strong>
-                <small>
-                  {selected.kind === "dm"
-                    ? selected.members.find((p) => p.id !== state.user.id)
-                        ?.status || "Direct message"
-                    : `${selected.members.length} members`}
-                  {selected.muted && " · Muted"}
-                </small>
-              </button>
-              <div className="conversation-header-actions">
-                {miniDesktop && <IconButton label="Open in a pop-up" onClick={() => openMini(selected)}>
-                  <PictureInPicture2 size={22} />
-                </IconButton>}
-                <a
-                  className="icon-button"
-                  aria-label="Open Google Meet"
-                  title="Open Google Meet in a new tab"
-                  href="https://meet.google.com/new"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <Video size={23} />
-                </a>
-                <IconButton
-                  label="Search this conversation"
-                  onClick={() => {
-                    setSearchScope(selected.id);
-                    setSearchFilters(DEFAULT_SEARCH_FILTERS);
-                    setQuery("");
-                    setSelectedId(null);
-                    setView("search");
-                    searchRef.current?.focus();
-                  }}
-                >
-                  <Search size={23} />
-                </IconButton>
-                <IconButton
-                  label="Conversation details"
-                  onClick={() =>
-                    setModal({ type: "about", conversation: selected })
-                  }
-                >
-                  <Ellipsis size={24} />
-                </IconButton>
-              </div>
-            </header>
-            {chat.demo && (
-              <div className="demo-notice">
-                <span>Demo workspace</span>
-                <span>Explore freely. Your changes stay on this device.</span>
-                <button onClick={() => setModal({ type: "profile" })}>
-                  Your profile
-                  <ChevronRight size={14} />
-                </button>
-              </div>
-            )}
-            <div className="conversation-tabs">
-              <span className="current">Chat</span>
-              <button
-                onClick={() => {
-                  setModal({ type: "about", conversation: selected });
-                }}
-              >
-                Shared <File size={14} />
-              </button>
-            </div>
-            <div
-              className="messages-scroll"
-              ref={scrollRef}
-              onScroll={(e) => {
-                const el = e.currentTarget;
-                atBottom.current =
-                  el.scrollHeight - el.scrollTop - el.clientHeight < 90;
-              }}
-            >
-              <div className="conversation-intro">
-                <ConversationAvatar
-                  userId={state.user.id}
-                  conversation={selected}
-                />
-                <h1>{selected.name}</h1>
-                <p>
-                  {selected.description ||
-                    (selected.kind === "dm"
-                      ? `The beginning of your conversation with ${selected.name}.`
-                      : "A space to share ideas, ask questions, and move things forward.")}
-                </p>
-                {selected.kind !== "dm" && (
-                  <button
-                    className="text-button"
-                    onClick={() =>
-                      setModal({ type: "invite", conversation: selected })
-                    }
-                  >
-                    <Users size={15} />
-                    Add people
-                  </button>
-                )}
-              </div>
-              {messages.map((m, i) => (
-                <div key={m.id}>
-                  {(i === 0 ||
-                    new Date(messages[i - 1].createdAt).toDateString() !==
-                      new Date(m.createdAt).toDateString()) && (
-                    <div className="date-divider">
-                      <span>{dateLabel(m.createdAt)}</span>
-                    </div>
-                  )}
-                  {messageRow(m, false, "", selected.kind === "dm" ? "dm" : "standard")}
-                </div>
-              ))}
-              {!messages.length && (
-                <div className="empty-conversation">
-                  <MessageSquare size={28} />
-                  <p>Start the conversation</p>
-                  <span>Say hello. A good idea often starts there.</span>
-                </div>
-              )}
-            </div>
-            <div className="composer-viewport">{composer()}</div>
-          </>
-        ) : (
+  const homeView = (
           <div className="home-view">
             <header className="home-header">
               <div>
@@ -2254,6 +1888,7 @@ export default function ChatApp() {
                                   : "Find messages and conversations."}
                 </p>
               </div>
+              <div className={splitStyles.homeControls}>
               <button
                 className={`filter-button ${unreadOnly ? "active" : ""}`}
                 aria-pressed={unreadOnly}
@@ -2262,6 +1897,15 @@ export default function ChatApp() {
                 <span className="filter-dot" />
                 Unread{unreadOnly && <Check size={14} />}
               </button>
+              {view === "home" && splitDesktop && <button
+                ref={splitToggleRef}
+                className={`filter-button ${splitEnabled ? "active" : ""}`}
+                aria-label="Split pane mode"
+                aria-pressed={splitEnabled}
+                title={splitEnabled ? "Turn off split pane mode" : "Turn on split pane mode"}
+                onClick={toggleSplit}
+              ><PanelRight size={17} /></button>}
+              </div>
             </header>
             <div className="mobile-search">
               <Search size={21} />
@@ -2508,8 +2152,9 @@ export default function ChatApp() {
                       className={`conversation-row-wrap ${c.unread ? "unread-row" : ""}`}
                     >
                       <button
-                        className="conversation-row"
-                        onClick={() => openConversation(c)}
+                        className={`conversation-row ${previewActive && selectedId === c.id ? splitStyles.selectedRow : ""}`}
+                        aria-current={previewActive && selectedId === c.id ? "true" : undefined}
+                        onClick={(event) => openHomeConversation(c, event.currentTarget)}
                       >
                         <ConversationAvatar
                           userId={state.user.id}
@@ -2579,7 +2224,459 @@ export default function ChatApp() {
               )}
             </div>
           </div>
-        )}
+  );
+
+  return (
+    <div
+      className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${selected ? "conversation-open" : ""} ${thread ? "thread-open" : ""}`}
+      onClickCapture={(event) => {
+        // Safari does not focus clicked buttons by default. Establish the
+        // trigger before opening a dialog so Escape restores a useful target.
+        const button =
+          event.target instanceof Element
+            ? event.target.closest("button")
+            : null;
+        if (button && !button.closest("[role=dialog]"))
+          menuAnchor.current = button;
+        button?.focus({ preventScroll: true });
+      }}
+    >
+      <a href="#main-content" className="skip-link">
+        Skip to conversation
+      </a>
+      <aside className="app-rail" aria-label="App shortcuts">
+        <IconButton
+          label="Main menu"
+          expanded={!sidebarCollapsed}
+          controls="chat-navigation"
+          onClick={() => setSidebarCollapsed((value) => !value)}
+        >
+          <Menu size={24} />
+        </IconButton>
+        <button
+          className="rail-chat"
+          onClick={() => navigate("home")}
+          aria-label="Chat"
+        >
+          <MessageCircle size={25} />
+          <small>Chat</small>
+        </button>
+        <div className="rail-bottom">
+          <IconButton
+            label="Add Chat to Home Screen"
+            onClick={() => setModal({ type: "install" })}
+          >
+            <Smartphone size={23} />
+          </IconButton>
+        </div>
+      </aside>
+      <header className="app-topbar">
+        <Brand />
+        <form
+          className="search-box"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setView("search");
+            setSelectedId(null);
+          }}
+        >
+          <Search size={22} />
+          <input
+            ref={searchRef}
+            aria-label="Search in chat"
+            placeholder={
+              searchScope
+                ? `Search ${state.conversations.find((c) => c.id === searchScope)?.name || "conversation"}`
+                : "Search in chat"
+            }
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              if (e.target.value) {
+                setView("search");
+                setSelectedId(null);
+              }
+            }}
+          />
+          {query && (
+            <IconButton
+              label="Clear search"
+              onClick={() => {
+                setQuery("");
+                setSearchScope(null);
+                setSearchFilters(DEFAULT_SEARCH_FILTERS);
+                setView("home");
+              }}
+            >
+              <X size={19} />
+            </IconButton>
+          )}
+          <span className="search-shortcut">⌘ K</span>
+        </form>
+        <div className="topbar-actions">
+          <button
+            className="status-button"
+            onClick={() => setModal({ type: "status" })}
+          >
+            <span
+              className={`status-dot ${state.user.status === "Do not disturb" ? "dnd" : state.user.status === "Away" ? "away" : ""}`}
+            />
+            {state.user.status === "Do not disturb"
+              ? "Do not disturb"
+              : state.user.status === "Away"
+                ? "Away"
+                : "Active"}
+            <ChevronDown size={16} />
+          </button>
+          <IconButton
+            label="Help and installation"
+            onClick={() => setModal({ type: "support" })}
+          >
+            <MaterialHelp />
+          </IconButton>
+          <IconButton
+            label="Settings"
+            onClick={() => setModal({ type: "settings" })}
+          >
+            <MaterialSettings />
+          </IconButton>
+          <button
+            className="account-button"
+            aria-label="Your profile"
+            onClick={() => setModal({ type: "profile" })}
+          >
+            <Avatar person={state.user} size="small" />
+          </button>
+        </div>
+      </header>
+      <aside
+        id="chat-navigation"
+        className="sidebar"
+        aria-label="Chat navigation"
+      >
+        <button
+          className="new-chat-button"
+          onClick={() => setModal({ type: "new", kind: "dm" })}
+        >
+          <MaterialNewChat />
+          New chat
+        </button>
+        <nav>
+          <button
+            className="sidebar-shortcuts-heading"
+            aria-expanded={shortcutsExpanded}
+            aria-controls="shortcut-navigation-items"
+            onClick={() => setShortcutsExpanded((value) => !value)}
+          >
+            {shortcutsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <span>Shortcuts</span>
+          </button>
+          <div id="shortcut-navigation-items" hidden={!shortcutsExpanded && !sidebarCollapsed}>
+          {navItems.map((item) => (
+            <button
+              key={item.view}
+              aria-label={item.label}
+              className={`nav-item ${(!selected || previewActive) && view === item.view ? "selected" : ""}`}
+              onClick={() => navigate(item.view)}
+            >
+              {item.icon}
+              <span>{item.label}</span>
+              {!!item.count && <span className="nav-count">{item.count}</span>}
+            </button>
+          ))}
+          </div>
+        </nav>
+        <div className="sidebar-group">
+          <div className="sidebar-group-heading">
+            <button
+              aria-expanded={directExpanded}
+              aria-controls="direct-conversations"
+              onClick={() => setDirectExpanded((value) => !value)}
+            >
+              {directExpanded ? (
+                <ChevronDown size={17} />
+              ) : (
+                <ChevronRight size={17} />
+              )}
+              Direct messages
+            </button>
+            <IconButton
+              label="New direct message"
+              onClick={() => setModal({ type: "new", kind: "dm" })}
+            >
+              <Plus size={19} />
+            </IconButton>
+          </div>
+          <div id="direct-conversations" hidden={!directExpanded}>
+            {state.conversations
+              .filter((c) => c.kind !== "space" && !c.section)
+              .slice(0, 7)
+              .map((c) => (
+                <button
+                  key={c.id}
+                  aria-label={c.name}
+                  className={`sidebar-conversation ${!previewActive && selectedId === c.id ? "selected" : ""}`}
+                  onClick={() => openConversation(c)}
+                >
+                  <ConversationAvatar
+                    userId={state.user.id}
+                    conversation={c}
+                    small
+                  />
+                  <span className={c.unread ? "unread" : ""}>{c.name}</span>
+                  {c.muted && <BellOff size={13} />}
+                  {!!c.unread && <span className="unread-dot" />}
+                </button>
+              ))}
+          </div>
+        </div>
+        <div className="sidebar-group">
+          <div className="sidebar-group-heading">
+            <button
+              aria-expanded={spacesExpanded}
+              aria-controls="space-conversations"
+              onClick={() => setSpacesExpanded((value) => !value)}
+            >
+              {spacesExpanded ? (
+                <ChevronDown size={17} />
+              ) : (
+                <ChevronRight size={17} />
+              )}
+              Spaces
+            </button>
+            <IconButton
+              label="New space"
+              onClick={() => setModal({ type: "new", kind: "space" })}
+            >
+              <Plus size={19} />
+            </IconButton>
+          </div>
+          <div id="space-conversations" hidden={!spacesExpanded}>
+            {state.conversations
+              .filter((c) => c.kind === "space" && !c.section)
+              .map((c) => (
+                <button
+                  key={c.id}
+                  aria-label={c.name}
+                  className={`sidebar-conversation ${!previewActive && selectedId === c.id ? "selected" : ""}`}
+                  onClick={() => openConversation(c)}
+                >
+                  <ConversationAvatar
+                    userId={state.user.id}
+                    conversation={c}
+                    small
+                  />
+                  <span className={c.unread ? "unread" : ""}>{c.name}</span>
+                  {c.pinned && <Pin size={13} />}
+                  {!!c.unread && <span className="unread-dot" />}
+                </button>
+              ))}
+          </div>
+        </div>
+        {sectionNames.map((section) => (
+          <div className="sidebar-group" key={section}>
+            <div className="sidebar-group-heading">
+              <button onClick={() => navigate("sections")}>
+                <ChevronDown size={17} />
+                {section}
+              </button>
+            </div>
+            {state.conversations
+              .filter((c) => c.section === section)
+              .map((c) => (
+                <button
+                  aria-label={c.name}
+                  className={`sidebar-conversation ${!previewActive && selectedId === c.id ? "selected" : ""}`}
+                  key={c.id}
+                  onClick={() => openConversation(c)}
+                >
+                  <ConversationAvatar
+                    userId={state.user.id}
+                    conversation={c}
+                    small
+                  />
+                  <span>{c.name}</span>
+                </button>
+              ))}
+          </div>
+        ))}
+        <div className="sidebar-footer">
+          {chat.demo && <span className="demo-badge">DEMO WORKSPACE</span>}
+          <span>
+            <span
+              className={`connection-dot ${chat.offline ? "offline" : ""}`}
+            />
+            {chat.offline
+              ? "May be offline"
+              : chat.demo
+                ? "Local preview"
+                : "Signed in"}
+          </span>
+        </div>
+      </aside>
+      <main id="main-content" className={`main-panel ${previewActive ? splitStyles.split : ""}`}>
+        {(!selected || previewActive) && homeView}
+        {selected && <section key="conversation" aria-label={previewActive ? "Conversation preview" : "Conversation"} className={`conversation-pane ${splitStyles.pane} ${previewActive ? splitStyles.preview : ""}`}>
+            {previewActive ? (
+            <header className={splitStyles.previewHeader}>
+              <ConversationAvatar userId={state.user.id} conversation={selected} />
+              <button className={splitStyles.previewTitle} onClick={() => setModal({ type: "about", conversation: selected })}>
+                {selected.name}
+              </button>
+              <IconButton label="Expand conversation" onClick={expandPreview}><Maximize2 size={18} /></IconButton>
+              <IconButton label="Close conversation preview" onClick={closePreview}><X size={18} /></IconButton>
+            </header>
+            ) : (
+            <header className="conversation-header">
+              <IconButton
+                label="Back to conversations"
+                className="mobile-back"
+                onClick={() => {
+                  setSelectedId(null);
+                  setThreadId(null);
+                }}
+              >
+                <ArrowLeft size={24} />
+              </IconButton>
+              <ConversationAvatar
+                userId={state.user.id}
+                conversation={selected}
+              />
+              <button
+                className="conversation-title"
+                onClick={() =>
+                  setModal({ type: "about", conversation: selected })
+                }
+              >
+                <strong>
+                  {selected.name}
+                  <ChevronDown size={18} />
+                </strong>
+                <small>
+                  {selected.kind === "dm"
+                    ? selected.members.find((p) => p.id !== state.user.id)
+                        ?.status || "Direct message"
+                    : `${selected.members.length} members`}
+                  {selected.muted && " · Muted"}
+                </small>
+              </button>
+              <div className="conversation-header-actions">
+                {miniDesktop && <IconButton label="Open in a pop-up" onClick={() => openMini(selected)}>
+                  <PictureInPicture2 size={22} />
+                </IconButton>}
+                <a
+                  className="icon-button"
+                  aria-label="Open Google Meet"
+                  title="Open Google Meet in a new tab"
+                  href="https://meet.google.com/new"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <Video size={23} />
+                </a>
+                <IconButton
+                  label="Search this conversation"
+                  onClick={() => {
+                    setSearchScope(selected.id);
+                    setSearchFilters(DEFAULT_SEARCH_FILTERS);
+                    setQuery("");
+                    setSelectedId(null);
+                    setView("search");
+                    searchRef.current?.focus();
+                  }}
+                >
+                  <Search size={23} />
+                </IconButton>
+                <IconButton
+                  label="Conversation details"
+                  onClick={() =>
+                    setModal({ type: "about", conversation: selected })
+                  }
+                >
+                  <Ellipsis size={24} />
+                </IconButton>
+              </div>
+            </header>
+            )}
+            {chat.demo && (
+              <div className="demo-notice">
+                <span>Demo workspace</span>
+                <span>Explore freely. Your changes stay on this device.</span>
+                <button onClick={() => setModal({ type: "profile" })}>
+                  Your profile
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+            )}
+            {!previewActive && <div className="conversation-tabs">
+              <span className="current">Chat</span>
+              <button
+                onClick={() => {
+                  setModal({ type: "about", conversation: selected });
+                }}
+              >
+                Shared <File size={14} />
+              </button>
+            </div>}
+            <div
+              className="messages-scroll"
+              ref={scrollRef}
+              onScroll={(e) => {
+                const el = e.currentTarget;
+                atBottom.current =
+                  el.scrollHeight - el.scrollTop - el.clientHeight < 90;
+              }}
+            >
+              <div className="conversation-intro">
+                <ConversationAvatar
+                  userId={state.user.id}
+                  conversation={selected}
+                />
+                <h1>{selected.name}</h1>
+                <p>
+                  {selected.description ||
+                    (selected.kind === "dm"
+                      ? `The beginning of your conversation with ${selected.name}.`
+                      : "A space to share ideas, ask questions, and move things forward.")}
+                </p>
+                {selected.kind !== "dm" && (
+                  <button
+                    className="text-button"
+                    onClick={() =>
+                      setModal({ type: "invite", conversation: selected })
+                    }
+                  >
+                    <Users size={15} />
+                    Add people
+                  </button>
+                )}
+              </div>
+              {previewActive && <div className={splitStyles.historyNotice}>
+                <span><History size={14} /> Messages are saved</span>
+                <p>{chat.demo ? "Saved on this device in the demo workspace." : "Your conversation stays available across your devices."}</p>
+              </div>}
+              {messages.map((m, i) => (
+                <div key={m.id}>
+                  {(i === 0 ||
+                    new Date(messages[i - 1].createdAt).toDateString() !==
+                      new Date(m.createdAt).toDateString()) && (
+                    <div className="date-divider">
+                      <span>{dateLabel(m.createdAt)}</span>
+                    </div>
+                  )}
+                  {messageRow(m, false, "", selected.kind === "dm" ? "dm" : "standard")}
+                </div>
+              ))}
+              {!messages.length && !previewActive && (
+                <div className="empty-conversation">
+                  <MessageSquare size={28} />
+                  <p>Start the conversation</p>
+                  <span>Say hello. A good idea often starts there.</span>
+                </div>
+              )}
+            </div>
+            <div className="composer-viewport">{composer()}</div>
+        </section>}
       </main>
       {thread && selected && (
         <aside className="thread-panel">

@@ -1,0 +1,76 @@
+/* Home split-pane navigation follows Google's documented flow. These are
+   responsive app values, not claimed extracts of Google's private CSS. */
+.pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.split:global(.main-panel) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  border-radius: 0;
+  background: transparent;
+}
+.split > :global(.home-view), .preview {
+  background: var(--surface);
+  border-radius: 24px;
+  overflow: hidden;
+}
+.homeControls { display: flex; align-items: center; gap: 8px; }
+.homeControls > button { flex-shrink: 0; }
+.selectedRow:global(.conversation-row) { background: var(--blue-soft); }
+.previewHeader {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  height: 64px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.previewHeader > :global(.avatar) { width: 24px; height: 24px; font-size: 12px; }
+.previewTitle {
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 8px 0;
+}
+.preview :global(.messages-scroll) {
+  display: flex;
+  flex-direction: column;
+  padding-top: 16px;
+}
+.preview :global(.messages-scroll) > div { width: 100%; flex-shrink: 0; }
+.preview :global(.messages-scroll) > :global(.conversation-intro) {
+  flex: 1 0 220px;
+  justify-content: center;
+  padding: 24px 0;
+}
+.historyNotice { text-align: center; color: var(--muted); padding: 16px 0 4px; }
+.historyNotice > span { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+.historyNotice p { font-size: 12px; margin-top: 8px; }
+.preview :global(.composer-wrap) { padding: 12px 8px 20px; }
+.preview :global(.composer) { position: relative; margin-inline: 40px 44px; }
+.preview :global(.composer-attach) {
+  position: absolute;
+  left: -40px;
+  bottom: 8px;
+  width: 32px;
+  height: 40px;
+  border-radius: 20px;
+  background: var(--selected);
+  color: var(--ink);
+}
+.preview :global(.send-button) { position: absolute; right: -44px; bottom: 8px; margin: 0; border-radius: 12px; }
+.preview :global(.composer-hint) { margin-left: 60px; }
+.preview :global(.demo-notice) { flex-shrink: 0; }
+.preview :global(.demo-notice) > span + span, .preview :global(.demo-notice) > button { display: none; }

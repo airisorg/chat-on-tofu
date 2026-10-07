@@ -6,6 +6,7 @@ import { File, Maximize2, Mic, Minus, Plus, SendHorizontal, Smile, X } from "luc
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from "@/lib/media-limits";
 import type { Attachment, Conversation, Message } from "@/lib/types";
 import VoiceRecorder from "./VoiceRecorder";
+import AudioPreview from "./AudioPreview";
 import styles from "./MiniConversation.module.css";
 
 export type MiniDraft = { text: string; attachments: Attachment[] };
@@ -172,7 +173,7 @@ export default function MiniConversation({
               {attachment.type.startsWith("audio/") ? <Mic size={15} /> : <File size={15} />}
               <span title={attachment.name}>{attachment.name}</span>
               <button type="button" className={styles.icon} aria-label={`Remove ${attachment.name} from pop-up`} disabled={locked || readingFiles} onClick={() => onDraft({ ...draft, attachments: draft.attachments.filter((_, i) => index !== i) })}><X size={15} /></button>
-              {attachment.type.startsWith("audio/") && <audio controls src={attachment.url} aria-label="Pop-up voice note preview" />}
+              {attachment.type.startsWith("audio/") && <AudioPreview controls src={attachment.url} aria-label="Pop-up voice note preview" />}
             </div>)}
           </div>}
           {emojiOpen && <div ref={emojiPicker} className={styles.emoji} role="group" aria-label="Pop-up emoji picker">

@@ -16,7 +16,7 @@
   overflow: hidden;
 }
 .minimized { width: 224px; height: 44px; }
-.header { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 10px 6px 14px; background: var(--surface-soft); }
+.header { display: flex; flex-shrink: 0; align-items: center; gap: 8px; min-height: 44px; padding: 6px 10px 6px 14px; background: var(--surface-soft); }
 .minimized .header { min-height: 43px; padding-top: 5px; padding-bottom: 5px; }
 .header > :global(.avatar) { width: 28px; height: 28px; font-size: 10px; flex-shrink: 0; }
 .header > :global(.space-avatar) { width: 28px; height: 28px; flex-shrink: 0; border-radius: 9px; }
@@ -51,3 +51,16 @@ button.title { border: 0; background: transparent; color: inherit; height: 32px;
 .voiceHeader { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
 :global([data-theme="dark"]) .panel { box-shadow: 0 4px 24px #0008, 0 1px 6px #0006; }
 @media (prefers-reduced-motion: reduce) { .panel { scroll-behavior: auto; } }
+
+/* Keep actions visible when a desktop window is shorter than the usual panel.
+   Files and long guidance scroll internally; the draft is never truncated. */
+@media (min-width: 768px) and (pointer: fine) and (max-height: 500px) {
+  .footer { display: flex; flex-direction: column; flex-shrink: 1; min-height: 0; }
+  .messages { padding-block: 0; }
+  .attachments { flex: 0 1 auto; min-height: 32px; max-height: 64px; }
+  .notice, .error { flex: 0 1 auto; min-height: 18px; max-height: 36px; overflow-y: auto; overscroll-behavior: contain; }
+  .notice { flex-shrink: 0; }
+  .composer { flex-shrink: 0; }
+  .composer textarea { max-height: 40px; }
+  .hint { display: none; }
+}

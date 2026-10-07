@@ -864,17 +864,23 @@ button:hover {
 .message-meta {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 9px;
   margin-bottom: 7px;
   min-height: 15px;
   font-size: 11px;
 }
 .message-meta strong {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   font-weight: 600;
   font-size: 12px;
 }
 .message-meta time,
 .edited {
+  flex-shrink: 0;
+  white-space: nowrap;
   color: var(--muted);
   font-size: 10px;
 }
@@ -920,7 +926,9 @@ button:hover {
 }
 .message-actions {
   position: absolute;
-  top: -19px;
+  /* A31px control plus6px padding and2px border makes a39px toolbar.
+     End it1px before the normal metadata starts8px into the row. */
+  top: -32px;
   right: 12px;
   display: flex;
   gap: 1px;
@@ -986,6 +994,9 @@ button:hover {
 .reaction.mine {
   background: var(--blue-soft);
   border-color: #a8c7fa;
+}
+.reaction.mine > span {
+  color: var(--ink);
 }
 .thread-link {
   display: flex;
@@ -1558,6 +1569,7 @@ button:hover {
   box-shadow: 0 4px 24px #0002;
   border-radius: 12px;
   z-index: 100;
+  pointer-events: none;
   min-height: 50px;
   max-width: calc(100vw - 30px);
   display: flex;
@@ -1568,6 +1580,7 @@ button:hover {
   line-height: 1.5;
 }
 .toast .icon-button {
+  pointer-events: auto;
   color: #fff;
   width: 32px;
   height: 32px;
@@ -3906,11 +3919,11 @@ button:hover {
   (min-width: 800px) and (pointer: fine) {
   /* History and composer share an envelope, including native scrollbar
      gutters. Keep this viewport box out of compact touch layouts. */
-  .main-panel > .messages-scroll {
+  :is(.main-panel, .conversation-pane) > .messages-scroll {
     padding-inline: var(--message-inline-inset);
     scrollbar-gutter: stable both-edges;
   }
-  .main-panel > .composer-viewport {
+  :is(.main-panel, .conversation-pane) > .composer-viewport {
     display: block;
     flex-shrink: 0;
     padding-inline: var(--message-inline-inset);
@@ -4159,14 +4172,14 @@ button:hover {
 /* A short desktop window still needs a usable input and delivery status.
    Let draft previews scroll independently rather than grow below the pane. */
 @media (min-width: 800px) and (max-height: 500px) and (pointer: fine) {
-  .main-panel > .conversation-header {
+  :is(.main-panel, .conversation-pane) > .conversation-header {
     height: 52px;
     min-height: 52px;
   }
-  .main-panel > .messages-scroll {
+  :is(.main-panel, .conversation-pane) > .messages-scroll {
     padding-block: 0;
   }
-  .main-panel > .composer-viewport {
+  :is(.main-panel, .conversation-pane) > .composer-viewport {
     display: flex;
     flex-direction: column;
     flex-shrink: 1;

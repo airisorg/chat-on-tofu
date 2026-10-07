@@ -1,4 +1,5 @@
 .picker {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -60,7 +61,7 @@
   border-radius: 50%;
 }
 .toneControl {
-  position: relative;
+  position: static;
   flex-shrink: 0;
 }
 .toneTrigger {
@@ -78,8 +79,11 @@
 }
 .tones {
   position: absolute;
-  right: 0;
-  top: 38px;
+  right: 8px;
+  top: 48px;
+  max-height: calc(100% - 56px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   padding: 4px;
@@ -90,6 +94,7 @@
   z-index: 2;
 }
 .tones button {
+  flex-shrink: 0;
   width: 40px;
   height: 36px;
   padding: 0;
@@ -192,6 +197,10 @@
 .compact .searchRow {
   padding: 8px;
 }
+.compact .tones {
+  top: 46px;
+  max-height: calc(100% - 54px);
+}
 @media (max-width: 767px), (pointer: coarse) {
   .search {
     height: 44px;
@@ -208,8 +217,10 @@
     width: 44px;
     height: 44px;
   }
-  .tones {
-    top: 48px;
+  .tones,
+  .compact .tones {
+    top: 58px;
+    max-height: calc(100% - 66px);
   }
   .tones button {
     width: 44px;

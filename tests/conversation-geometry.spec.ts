@@ -303,7 +303,7 @@ test.describe('narrow desktop composer', () => {
     // Exercise the no-reserved-gutter environment too. Default Chrome and
     // WebKit gutter measurements are recorded separately; this is not a
     // claim about every operating system's native scrollbar implementation.
-    await page.addStyleTag({ content: '.main-panel>.messages-scroll,.main-panel>.composer-viewport{scrollbar-width:none;scrollbar-gutter:auto} .main-panel>.messages-scroll::-webkit-scrollbar,.main-panel>.composer-viewport::-webkit-scrollbar{display:none}' });
+    await page.addStyleTag({ content: ':is(.main-panel,.conversation-pane)>.messages-scroll,:is(.main-panel,.conversation-pane)>.composer-viewport{scrollbar-width:none;scrollbar-gutter:auto} :is(.main-panel,.conversation-pane)>.messages-scroll::-webkit-scrollbar,:is(.main-panel,.conversation-pane)>.composer-viewport::-webkit-scrollbar{display:none}' });
     expect((await geometry(page)).scrollClientLeft).toBe(0);
     await verify(page, info, 'no-reserved-gutter'); await withinComposer();
     await removeText.click(); await expect(removeText).toBeHidden();

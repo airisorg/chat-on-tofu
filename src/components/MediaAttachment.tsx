@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowDownToLine, File, Mic, RefreshCw } from "lucide-react";
 import type { Attachment } from "@/lib/types";
 import AudioPlayer from "./AudioPlayer";
@@ -24,6 +24,7 @@ export default function MediaAttachment({
   shared?: boolean;
 }) {
   const container = useRef<HTMLDivElement>(null);
+  const [failedImageSource, setFailedImageSource] = useState("");
   const ready = !!attachment.url && !attachment.loading && !attachment.error;
   useEffect(() => {
     if (ready || attachment.error || !container.current) return;
@@ -86,6 +87,17 @@ export default function MediaAttachment({
           <span>{attachment.name}</span>
           <ArrowDownToLine size={17} />
         </a>
+      ) : attachment.type.startsWith("image/") && failedImageSource === attachment.url ? (
+        <div className={styles.placeholder} role="status">
+          <File size={21} />
+          <span>
+            <strong>{attachment.name}</strong>
+            <small>Image preview unavailable. Download the original file.</small>
+          </span>
+          <a className={styles.retry} href={attachment.url} download={attachment.name} aria-label={`Download ${attachment.name}`}>
+            <ArrowDownToLine size={20} />
+          </a>
+        </div>
       ) : attachment.type.startsWith("audio/") ? (
         <AudioPlayer
           src={attachment.url}
@@ -119,7 +131,7 @@ export default function MediaAttachment({
           }
         >
           {attachment.type.startsWith("image/") ? (
-            <img src={attachment.url} alt={attachment.name} />
+            <img key={attachment.url} src={attachment.url} alt={attachment.name} onError={() => setFailedImageSource(attachment.url)} />
           ) : (
             <File size={21} />
           )}

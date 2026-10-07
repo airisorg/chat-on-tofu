@@ -311,3 +311,29 @@ test('an empty media-only quota restore keeps the omitted-file marker and origin
   await expect(reopened.getByRole('article')).toHaveCount(1);
   await expect.poll(() => reopened.getByRole('article').getByRole('img', { name: file.name }).evaluate(image => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0)).toBe(true);
 });
+
+test.describe('desktop Home preview send ownership', () => {
+  test.use({ viewport: { width: 1440, height: 900 }, isMobile: false, hasTouch: false });
+  test('closing a preview during a held ACK preserves a newer draft without duplicating the saved message', async ({ context }) => {
+    const f = await fixture(context), page = await context.newPage();
+    await page.routeWebSocket(`${provider.replace('https:', 'wss:')}/**`, socket => socket.close());
+    await page.goto(base);
+    await expect(page.getByRole('heading', { name: 'Home', exact: true })).toBeVisible();
+    await page.getByRole('navigation').getByRole('button', { name: 'Home', exact: true }).click();
+    await page.getByRole('main').locator('.conversation-row').filter({ hasText: 'Lifecycle Peer' }).click();
+    await expect(page.getByRole('button', { name: 'Close conversation preview' })).toBeVisible();
+    f.setHold('after-commit-ack');
+    await input(page).fill('Saved from the preview'); await sendButton(page).click();
+    await expect.poll(() => f.sends.length).toBe(1);
+    await page.getByRole('button', { name: 'Close conversation preview' }).click();
+    await page.getByRole('main').locator('.conversation-row').filter({ hasText: 'Lifecycle Peer' }).click();
+    await input(page).fill('A newer unsent preview draft');
+    f.release();
+    await expect(sendButton(page)).not.toHaveAttribute('aria-busy', 'true');
+    await expect(input(page)).toHaveValue('A newer unsent preview draft');
+    await expect(page.getByRole('article').filter({ hasText: 'Saved from the preview' })).toHaveCount(1);
+    await page.getByRole('button', { name: 'Expand conversation', exact: true }).click();
+    await expect(input(page)).toHaveValue('A newer unsent preview draft');
+    expect(f.state.messages).toHaveLength(1); expect(f.sends).toHaveLength(1);
+  });
+});

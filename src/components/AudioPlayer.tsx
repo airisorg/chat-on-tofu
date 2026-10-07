@@ -8,6 +8,14 @@ const timestamp = (seconds: number) =>
   `${Math.floor(Math.max(0, seconds) / 60)}:${String(Math.floor(Math.max(0, seconds) % 60)).padStart(2, "0")}`;
 const PLAY_EVENT = "chat-audio-player-play";
 
+/** Message players and native draft/recording previews share one playback lane. */
+export function announceAudioPlayback(active: HTMLAudioElement) {
+  document.querySelectorAll("audio").forEach((element) => {
+    if (element !== active) element.pause();
+  });
+  document.dispatchEvent(new CustomEvent(PLAY_EVENT, { detail: active }));
+}
+
 export default function AudioPlayer({
   src,
   name,
@@ -149,9 +157,7 @@ export default function AudioPlayer({
           onTimeUpdate={() => setElapsed(audio.current?.currentTime || 0)}
           onPlay={() => {
             setPlaying(true);
-            document.dispatchEvent(
-              new CustomEvent(PLAY_EVENT, { detail: audio.current }),
-            );
+            if (audio.current) announceAudioPlayback(audio.current);
           }}
           onPause={() => setPlaying(false)}
           onEnded={() => {
