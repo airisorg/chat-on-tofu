@@ -1,4 +1,4 @@
-import { localBaseUrl, chromiumExecutable } from "./tests/browser-config";
+import { localBaseUrl, chromiumExecutable } from './tests/browser-config';
 import { defineConfig } from '@playwright/test';
 
 const baseURL = localBaseUrl();

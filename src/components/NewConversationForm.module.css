@@ -9,7 +9,7 @@
   flex: 1;
   overflow-y: auto;
 }
-:global(:root[data-theme="dark"]) .form {
+:global(:root[data-theme='dark']) .form {
   --picker-fill: var(--search);
 }
 .hidden,

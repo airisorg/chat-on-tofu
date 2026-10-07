@@ -102,7 +102,7 @@
   font-size: 24px;
 }
 .tones button:hover,
-.tones button[aria-checked="true"] {
+.tones button[aria-checked='true'] {
   background: var(--selected);
 }
 .categories {
@@ -131,7 +131,7 @@
 .categories button:hover {
   background: var(--hover);
 }
-.categories button[aria-selected="true"] {
+.categories button[aria-selected='true'] {
   color: var(--blue);
   border-bottom-color: var(--blue);
 }
@@ -170,8 +170,7 @@
   background: transparent;
   font-size: 28px;
   line-height: 1;
-  font-family:
-    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
 }
 .emoji:hover,
 .emoji:focus-visible {

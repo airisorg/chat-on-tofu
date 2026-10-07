@@ -15,12 +15,15 @@
   border-radius: 0;
   background: transparent;
 }
-.split > :global(.home-view), .preview {
+.split > :global(.home-view),
+.preview {
   background: var(--surface);
   border-radius: 24px;
   overflow: hidden;
 }
-.selectedRow:global(.conversation-row) { background: var(--blue-soft); }
+.selectedRow:global(.conversation-row) {
+  background: var(--blue-soft);
+}
 .emptyPreview {
   position: relative;
   display: grid;
@@ -32,11 +35,30 @@
   border-radius: 24px;
   background: var(--surface);
 }
-.emptyPreview > button { position: absolute; top: 12px; right: 12px; }
-.emptyPreview > div { max-width: 340px; text-align: center; }
-.emptyPreview svg { color: var(--muted); }
-.emptyPreview h2 { margin-top: 24px; font-size: 16px; font-weight: 500; line-height: 24px; }
-.emptyPreview p { margin-top: 12px; font-size: 14px; line-height: 22px; color: var(--muted); }
+.emptyPreview > button {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+}
+.emptyPreview > div {
+  max-width: 340px;
+  text-align: center;
+}
+.emptyPreview svg {
+  color: var(--muted);
+}
+.emptyPreview h2 {
+  margin-top: 24px;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+}
+.emptyPreview p {
+  margin-top: 12px;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--muted);
+}
 .previewHeader {
   display: flex;
   flex-shrink: 0;
@@ -47,8 +69,16 @@
   border-bottom: 1px solid var(--line);
 }
 .previewHeader > :global(.avatar),
-.previewHeader > :global(.space-avatar) { width: 24px; height: 24px; font-size: 12px; flex-shrink: 0; }
-.previewHeader > :global(.space-avatar) svg { width: 14px; height: 14px; }
+.previewHeader > :global(.space-avatar) {
+  width: 24px;
+  height: 24px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.previewHeader > :global(.space-avatar) svg {
+  width: 14px;
+  height: 14px;
+}
 .previewTitle {
   min-width: 0;
   flex: 1;
@@ -65,17 +95,40 @@
   flex-direction: column;
   padding-top: 16px;
 }
-.preview :global(.messages-scroll) > div { width: 100%; flex-shrink: 0; }
+.preview :global(.messages-scroll) > div {
+  width: 100%;
+  flex-shrink: 0;
+}
 .preview :global(.messages-scroll) > :global(.conversation-intro) {
   flex: 1 0 220px;
   justify-content: center;
   padding: 24px 0;
 }
-.historyNotice { text-align: center; color: var(--muted); padding: 16px 0 4px; }
-.historyNotice > span { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
-.historyNotice p { font-size: 12px; margin-top: 8px; }
-.preview :global(.composer-wrap) { padding: 12px 8px 20px; }
-.preview :global(.composer) { position: relative; margin-inline: 40px 44px; }
+.historyNotice {
+  text-align: center;
+  color: var(--muted);
+  padding: 16px 0 4px;
+}
+.historyNotice > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.historyNotice p {
+  font-size: 12px;
+  margin-top: 8px;
+}
+.preview :global(.composer-wrap) {
+  padding: 12px 8px 20px;
+}
+.preview :global(.composer) {
+  position: relative;
+  margin-inline: 40px 44px;
+}
 .preview :global(.composer-attach) {
   position: absolute;
   left: -40px;
@@ -86,7 +139,20 @@
   background: var(--selected);
   color: var(--ink);
 }
-.preview :global(.send-button) { position: absolute; right: -44px; bottom: 8px; margin: 0; border-radius: 12px; }
-.preview :global(.composer-hint) { margin-left: 60px; }
-.preview :global(.demo-notice) { flex-shrink: 0; }
-.preview :global(.demo-notice) > span + span, .preview :global(.demo-notice) > button { display: none; }
+.preview :global(.send-button) {
+  position: absolute;
+  right: -44px;
+  bottom: 8px;
+  margin: 0;
+  border-radius: 12px;
+}
+.preview :global(.composer-hint) {
+  margin-left: 60px;
+}
+.preview :global(.demo-notice) {
+  flex-shrink: 0;
+}
+.preview :global(.demo-notice) > span + span,
+.preview :global(.demo-notice) > button {
+  display: none;
+}

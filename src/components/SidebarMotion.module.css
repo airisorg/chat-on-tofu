@@ -16,7 +16,7 @@
 
   .sidebar :global(nav)::before,
   .sidebar :global(.sidebar-group)::before {
-    content: "";
+    content: '';
     position: absolute;
     inset: -4px;
     z-index: -1;

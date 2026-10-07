@@ -1,5 +1,8 @@
 # Home filters and dense navigation: October 6 review
 
+Historical review of an intermediate release. The permanent filter-chip row
+described below was subsequently replaced; see [current Home controls](home-controls-parity.md).
+
 The reported tiny Home labels were real CSS choices: 11px on desktop, 10px on phones and 9px below 370px. The selected Mentions pill used a correctly centered 28px row, but its global keyboard outline painted 5px outside each edge and intruded into adjacent rows.
 
 ## Reference and judgment

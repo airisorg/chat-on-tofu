@@ -83,8 +83,13 @@
   line-height: 20px;
 }
 @media (max-width: 767px), (pointer: coarse) {
-  .message { width: 300px; }
-  .message :global(.menu-list > button) { min-height: 44px; padding: 12px; }
+  .message {
+    width: 300px;
+  }
+  .message :global(.menu-list > button) {
+    min-height: 44px;
+    padding: 12px;
+  }
 }
 .form :global(form) {
   display: flex;

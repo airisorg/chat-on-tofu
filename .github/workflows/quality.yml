@@ -1,0 +1,145 @@
+name: Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:coverage
+      - run: npm audit --audit-level=moderate
+      - run: npm run build
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: node-coverage
+          path: test-results/coverage/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  native-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CHAT_NATIVE_BUILD_BINDING: ${{ github.workspace }}/test-results/native-build-binding.json
+      CHAT_NATIVE_PG_BIN: /usr/lib/postgresql/16/bin
+      CHAT_NATIVE_OPENSSL: /usr/bin/openssl
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Install disposable database fixture tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y postgresql-16 openssl
+          "$CHAT_NATIVE_PG_BIN/postgres" --version
+          "$CHAT_NATIVE_OPENSSL" version
+      - name: Capture production build inputs
+        run: |
+          npx tsx -e '
+            import {captureBinding} from "./scripts/test-browser-suites";
+            import {mkdirSync,writeFileSync} from "node:fs";
+            const hashes=captureBinding(process.cwd());
+            delete hashes["next-env.d.ts"];
+            mkdirSync("test-results",{recursive:true});
+            writeFileSync("test-results/native-source-before.json",JSON.stringify(hashes,null,2));
+          '
+      - run: npm run build
+      - name: Bind the compiled API to unchanged source
+        run: |
+          npx tsx -e '
+            import {captureBinding,bindingChanges} from "./scripts/test-browser-suites";
+            import {readFileSync,writeFileSync} from "node:fs";
+            const before=JSON.parse(readFileSync("test-results/native-source-before.json","utf8"));
+            const after=captureBinding(process.cwd());
+            delete after["next-env.d.ts"];
+            if(bindingChanges(before,after).length) throw new Error("Source changed during build");
+            writeFileSync(process.env.CHAT_NATIVE_BUILD_BINDING!,JSON.stringify({
+              buildId:readFileSync(".next/BUILD_ID","utf8").trim(),
+              runtimeSourceHashes:after,
+              scope:"Fresh CI production build; generated next-env.d.ts excluded."
+            },null,2));
+          '
+      - name: Exercise native concurrency and compiled HTTP routes
+        shell: bash
+        env:
+          CHAT_NATIVE_WORK_DIR: ${{ runner.temp }}/relay-native
+        run: npm run test:native 2>&1 | tee test-results/native-ci.log
+      # Never upload a fixture cluster, its private TLS keys or HTTP auth state.
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: native-integration-evidence
+          path: |
+            test-results/native-ci.log
+            test-results/native-source-before.json
+            test-results/native-build-binding.json
+            ${{ runner.temp }}/relay-native/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      APP_URL: http://127.0.0.1:3100
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run build
+      - name: Serve the local synthetic-identity fixture
+        run: |
+          SUPABASE_URL=https://reliability-test.invalid SUPABASE_ANON_KEY=sb_publishable_ci_fixture npm start -- --hostname 127.0.0.1 --port 3100 > /tmp/chat-server.log 2>&1 &
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent "$APP_URL" > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/chat-server.log
+          exit 1
+      # Pixel baselines are macOS-specific; these suites assert behavior without
+      # updating or weakening the separate macOS screenshot gate.
+      - run: npm run test:security
+      - run: npm run test:reliability
+      - run: npm run test:offline
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: failure()
+        with:
+          name: browser-failures
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7

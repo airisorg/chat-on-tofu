@@ -59,7 +59,9 @@
   border: 2px solid transparent;
   border-radius: 12px;
   background: var(--switch-track);
-  transition: background-color 150ms ease, border-color 150ms ease;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease;
 }
 .thumb {
   display: grid;
@@ -70,7 +72,9 @@
   background: var(--switch-thumb);
   color: var(--blue);
   transform: translateX(0);
-  transition: transform 150ms ease, background-color 150ms ease;
+  transition:
+    transform 150ms ease,
+    background-color 150ms ease;
 }
 .trackOn {
   border-color: var(--selected);
@@ -86,7 +90,7 @@
   background: var(--hover);
   padding: 5px 10px;
 }
-:global([data-theme="dark"]) .controls {
+:global([data-theme='dark']) .controls {
   --switch-track: #5f6368;
   --switch-thumb: #e3e3e3;
 }
@@ -175,13 +179,13 @@
   padding: 10px 12px;
   border-radius: 0;
 }
-.viewMenu > button[aria-checked="true"] {
+.viewMenu > button[aria-checked='true'] {
   background: var(--hover);
 }
 .check {
   visibility: hidden;
 }
-.menu > button[aria-checked="true"] .check {
+.menu > button[aria-checked='true'] .check {
   visibility: visible;
 }
 .divider {

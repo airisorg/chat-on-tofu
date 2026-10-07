@@ -20,6 +20,6 @@
   background: #d93025;
 }
 
-:global(:root[data-theme="dark"]) .dnd {
+:global(:root[data-theme='dark']) .dnd {
   background: #f28b82;
 }

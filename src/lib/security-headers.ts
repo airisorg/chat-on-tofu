@@ -1,12 +1,18 @@
 /** Only trusted deployment configuration contributes external connection origins. */
-export function contentSecurityPolicy(nonce: string, authUrl: string | undefined, development = false): string {
+export function contentSecurityPolicy(
+  nonce: string,
+  authUrl: string | undefined,
+  development = false,
+): string {
   const connections = ["'self'"];
   try {
     const url = new URL(authUrl || '');
     if (url.protocol === 'https:' && !url.username && !url.password) {
       connections.push(url.origin, url.origin.replace(/^https:/, 'wss:'));
     }
-  } catch { /* An unconfigured local preview needs no identity-provider connection. */ }
+  } catch {
+    /* An unconfigured local preview needs no identity-provider connection. */
+  }
   // Local routed-provider fixtures and the dev server's HMR need these development sources.
   if (development) connections.push('https:', 'ws:');
   return [

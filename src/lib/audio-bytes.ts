@@ -5,7 +5,12 @@ export function audioDataUrlBytes(url: string): ArrayBuffer | null {
   const match = /^data:audio\/(?:wav|mpeg|webm|mp4|ogg);base64,/.exec(url);
   if (!match) return null;
   const encoded = url.slice(match[0].length);
-  if (!encoded || encoded.length > 4 * Math.ceil(MAX_ATTACHMENT_BYTES / 3) || encoded.length % 4 !== 0) return null;
+  if (
+    !encoded ||
+    encoded.length > 4 * Math.ceil(MAX_ATTACHMENT_BYTES / 3) ||
+    encoded.length % 4 !== 0
+  )
+    return null;
   const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0;
   // A single-character scan avoids a repeated-group regex overflowing on5MiB.
   if (/[^A-Za-z0-9+/]/.test(encoded.slice(0, encoded.length - padding))) return null;

@@ -1,5 +1,10 @@
 # Database performance, 2026-10-06
 
+These measurements describe the exact earlier revisions named below. They are
+not performance results for later source changes. The historical provider TLS
+limitation was subsequently addressed by the certificate-verifying build gate
+in `scripts/verify-database.ts`; each deployment must pass that gate itself.
+
 Ordinary history reads now execute five application SQL statements instead of eight. Empty histories use four instead of seven. Each request still verifies identity, enforces the database-backed quota, and reads current membership. These statement counts exclude BEGIN/COMMIT and the separate API quota queries; they are not a claim of 37.5% less database CPU or total service cost.
 
 ## Bounded history selection
@@ -15,16 +20,16 @@ Two measurement layers separate database behavior from the complete route:
 
 Full-route sequential medians, milliseconds. The before column pools the raw A1 and A2 samples rather than choosing the slower baseline. Each candidate row contains 20 samples; each pooled baseline contains 40.
 
-| Members | Owned history | Before | After | Change |
-|---:|---|---:|---:|---:|
-| 10 | One conversation, 50 messages | 3.380 | 4.047 | +0.667 ms / +19.7% |
-| 10 | One conversation, 2,000 messages | 14.988 | 15.702 | +0.714 ms / +4.8% |
-| 10 | Ten conversations × 2,000 short messages | 24.041 | 22.030 | −8.4% |
-| 10 | Ten conversations × 2,000 long messages | 27.725 | 26.249 | −5.3% |
-| 30 | One conversation, 50 messages | 2.881 | 2.893 | Within baseline variation |
-| 30 | One conversation, 2,000 messages | 16.322 | 16.172 | Within baseline variation |
-| 30 | Ten conversations × 2,000 short messages | 26.744 | 23.043 | −13.8% |
-| 30 | Ten conversations × 2,000 long messages | 28.391 | 25.067 | −11.7% |
+| Members | Owned history                            | Before |  After |                    Change |
+| ------: | ---------------------------------------- | -----: | -----: | ------------------------: |
+|      10 | One conversation, 50 messages            |  3.380 |  4.047 |        +0.667 ms / +19.7% |
+|      10 | One conversation, 2,000 messages         | 14.988 | 15.702 |         +0.714 ms / +4.8% |
+|      10 | Ten conversations × 2,000 short messages | 24.041 | 22.030 |                     −8.4% |
+|      10 | Ten conversations × 2,000 long messages  | 27.725 | 26.249 |                     −5.3% |
+|      30 | One conversation, 50 messages            |  2.881 |  2.893 | Within baseline variation |
+|      30 | One conversation, 2,000 messages         | 16.322 | 16.172 | Within baseline variation |
+|      30 | Ten conversations × 2,000 short messages | 26.744 | 23.043 |                    −13.8% |
+|      30 | Ten conversations × 2,000 long messages  | 28.391 | 25.067 |                    −11.7% |
 
 Large fixtures also include 50,000 inaccessible messages. The long full-route fixture uses compressible 6,000-character text and is distinct from the hash-block text in the native diagnostic. The complete responses retain their original exact content and byte counts, including the roughly 3 MiB long-history response bound. Identifiers, conversation associations, timestamps and message order are preserved in comparison digests; only naturally unordered roster/reaction arrays are canonicalized.
 
@@ -54,16 +59,16 @@ The benchmark used native PostgreSQL 15.19 and postgres.js over trusted loopback
 
 Thirty-member results, milliseconds:
 
-| Action | Before median | After median | Application SQL statements |
-|---|---:|---:|---:|
-| Read 50-message history | 1.395 | 1.174 | 8 → 5 |
-| Read 2,000 messages beside 50,000 foreign messages | 10.054 | 9.537 | 8 → 5 |
-| Send text | 10.832 | 11.347 | 16 → 14 |
-| Create a group | 11.956 | 11.585 | 20 → 18 |
-| Stage 5 MiB and send | 190.289 | 181.115 | 69 → 62 |
-| Download protected 5 MiB | 21.031 | 22.362 | 1 → 1 |
-| Read dense reactions | 41.960 | 39.332 | 8 → 5 |
-| Read ten owned conversations | 10.877 | 10.445 | 8 → 5 |
+| Action                                             | Before median | After median | Application SQL statements |
+| -------------------------------------------------- | ------------: | -----------: | -------------------------: |
+| Read 50-message history                            |         1.395 |        1.174 |                      8 → 5 |
+| Read 2,000 messages beside 50,000 foreign messages |        10.054 |        9.537 |                      8 → 5 |
+| Send text                                          |        10.832 |       11.347 |                    16 → 14 |
+| Create a group                                     |        11.956 |       11.585 |                    20 → 18 |
+| Stage 5 MiB and send                               |       190.289 |      181.115 |                    69 → 62 |
+| Download protected 5 MiB                           |        21.031 |       22.362 |                      1 → 1 |
+| Read dense reactions                               |        41.960 |       39.332 |                      8 → 5 |
+| Read ten owned conversations                       |        10.877 |       10.445 |                      8 → 5 |
 
 Timings are mixed. Small-history reads improved about 16% and dense reads about 6%, while local text-send and unchanged download-control medians were slower. Baseline A2 was generally faster than A1, showing shared-machine drift. The reliable result is fewer statements and preserved output, rather than every action being faster.
 

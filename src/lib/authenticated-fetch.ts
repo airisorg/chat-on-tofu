@@ -2,10 +2,19 @@ export type AuthSnapshot = { identity: string; token: string; generation: number
 
 export function refreshFailure(error: unknown): Error & { status: number } {
   const value = error as { status?: number; name?: string } | null;
-  const invalid = value?.status === 400 || value?.status === 401 || value?.status === 403 || value?.name === 'AuthSessionMissingError';
-  return Object.assign(new Error(invalid
-    ? 'Your session expired. Please sign in again.'
-    : 'Sign-in is temporarily unavailable. Your session is still saved; please try again.'), { status: invalid ? 401 : 503 });
+  const invalid =
+    value?.status === 400 ||
+    value?.status === 401 ||
+    value?.status === 403 ||
+    value?.name === 'AuthSessionMissingError';
+  return Object.assign(
+    new Error(
+      invalid
+        ? 'Your session expired. Please sign in again.'
+        : 'Sign-in is temporarily unavailable. Your session is still saved; please try again.',
+    ),
+    { status: invalid ? 401 : 503 },
+  );
 }
 
 // An actual 401 is rejected by the server before mutation. Only that response

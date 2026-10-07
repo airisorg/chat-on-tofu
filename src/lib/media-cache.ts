@@ -3,16 +3,28 @@ import { MAX_ATTACHMENT_BYTES } from './media-limits';
 import { withRequestDeadline } from './request-deadline';
 import { errorMessage } from './network-error';
 
-const REFERENCE = /^\/api\/attachments\?messageId=([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})&index=([0-2])$/i;
+const REFERENCE =
+  /^\/api\/attachments\?messageId=([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})&index=([0-2])$/i;
 const MAX_CACHED_BYTES = 64 * 1024 * 1024;
 const MAX_CACHED_FILES = 128;
-type Entry = { file: Attachment; status: 'queued' | 'loading' | 'ready' | 'error'; url: string; error?: string; touched: number; controller?: AbortController; done: Promise<void>; resolve: () => void };
+type Entry = {
+  file: Attachment;
+  status: 'queued' | 'loading' | 'ready' | 'error';
+  url: string;
+  error?: string;
+  touched: number;
+  controller?: AbortController;
+  done: Promise<void>;
+  resolve: () => void;
+};
 type Source = { file: Attachment; evicted?: boolean };
 type ObjectUrls = { create: (blob: Blob) => string; revoke: (url: string) => void };
 
 export function privateMediaReference(value: string): string | undefined {
   const match = REFERENCE.exec(value);
-  return match ? `/api/attachments?messageId=${match[1].toLowerCase()}&index=${match[2]}` : undefined;
+  return match
+    ? `/api/attachments?messageId=${match[1].toLowerCase()}&index=${match[2]}`
+    : undefined;
 }
 
 // Only visible attachments request a download. The cache holds bounded binary
@@ -28,7 +40,10 @@ export class PrivateMediaCache {
   constructor(
     private readonly fetchMedia: (source: string, signal: AbortSignal) => Promise<Response>,
     private readonly changed: () => void,
-    private readonly urls: ObjectUrls = { create: blob => URL.createObjectURL(blob), revoke: url => URL.revokeObjectURL(url) },
+    private readonly urls: ObjectUrls = {
+      create: (blob) => URL.createObjectURL(blob),
+      revoke: (url) => URL.revokeObjectURL(url),
+    },
     private readonly budget = { bytes: MAX_CACHED_BYTES, files: MAX_CACHED_FILES },
   ) {}
 
@@ -48,35 +63,60 @@ export class PrivateMediaCache {
   adopt(state: ChatState) {
     if (this.identity !== state.user.id) this.reset(state.user.id);
     const sources = new Map<string, Source>();
-    for (const message of state.messages) for (const file of message.attachments) {
-      const source = privateMediaReference(file.url);
-      if (source) {
-        const previous = this.sources.get(source);
-        const same = previous && previous.file.type === file.type && previous.file.size === file.size && previous.file.name === file.name;
-        sources.set(source, { file, evicted: same ? previous.evicted : false });
+    for (const message of state.messages)
+      for (const file of message.attachments) {
+        const source = privateMediaReference(file.url);
+        if (source) {
+          const previous = this.sources.get(source);
+          const same =
+            previous &&
+            previous.file.type === file.type &&
+            previous.file.size === file.size &&
+            previous.file.name === file.name;
+          sources.set(source, { file, evicted: same ? previous.evicted : false });
+        }
       }
-    }
     this.sources = sources;
     for (const [source, entry] of this.entries) {
       const file = sources.get(source)?.file;
-      if (!file || file.type !== entry.file.type || file.size !== entry.file.size || file.name !== entry.file.name) this.remove(source, entry);
+      if (
+        !file ||
+        file.type !== entry.file.type ||
+        file.size !== entry.file.size ||
+        file.name !== entry.file.name
+      )
+        this.remove(source, entry);
     }
   }
 
   materialize(state: ChatState): ChatState {
-    return { ...state, messages: state.messages.map(message => ({ ...message, attachments: message.attachments.map(file => {
-      const source = privateMediaReference(file.url);
-      if (!source) return file;
-      const entry = this.entries.get(source);
-      const evicted = this.sources.get(source)?.evicted;
-      return { ...file, url: entry?.status === 'ready' ? entry.url : '', loading: !evicted && entry?.status !== 'ready' && entry?.status !== 'error', error: entry?.error ?? (evicted ? 'This file was cleared from memory. Retry to load it again.' : undefined) };
-    }) })) };
+    return {
+      ...state,
+      messages: state.messages.map((message) => ({
+        ...message,
+        attachments: message.attachments.map((file) => {
+          const source = privateMediaReference(file.url);
+          if (!source) return file;
+          const entry = this.entries.get(source);
+          const evicted = this.sources.get(source)?.evicted;
+          return {
+            ...file,
+            url: entry?.status === 'ready' ? entry.url : '',
+            loading: !evicted && entry?.status !== 'ready' && entry?.status !== 'error',
+            error:
+              entry?.error ??
+              (evicted ? 'This file was cleared from memory. Retry to load it again.' : undefined),
+          };
+        }),
+      })),
+    };
   }
 
   load(sourceValue: string, retry = false): Promise<void> {
     const source = privateMediaReference(sourceValue);
     const reference = source && this.sources.get(source);
-    if (!source || !reference || !this.identity || (reference.evicted && !retry)) return Promise.resolve();
+    if (!source || !reference || !this.identity || (reference.evicted && !retry))
+      return Promise.resolve();
     const file = reference.file;
     reference.evicted = false;
     const previous = this.entries.get(source);
@@ -86,7 +126,9 @@ export class PrivateMediaCache {
       this.remove(source, previous);
     }
     let resolve: () => void = () => undefined;
-    const done = new Promise<void>(complete => { resolve = complete; });
+    const done = new Promise<void>((complete) => {
+      resolve = complete;
+    });
     const entry: Entry = { file, status: 'queued', url: '', touched: ++this.clock, done, resolve };
     this.entries.set(source, entry);
     this.trimEntries(source);
@@ -98,7 +140,11 @@ export class PrivateMediaCache {
   abortPending(message = 'You’re offline. Reconnect, then retry this file.') {
     for (const entry of this.entries.values()) {
       if (entry.status === 'loading') entry.controller?.abort(new Error(message));
-      else if (entry.status === 'queued') { entry.status = 'error'; entry.error = message; entry.resolve(); }
+      else if (entry.status === 'queued') {
+        entry.status = 'error';
+        entry.error = message;
+        entry.resolve();
+      }
     }
     this.changed();
   }
@@ -121,7 +167,9 @@ export class PrivateMediaCache {
 
   private trimEntries(keep: string) {
     while (this.entries.size > this.budget.files) {
-      const oldest = [...this.entries.entries()].filter(([source]) => source !== keep).sort((a, b) => a[1].touched - b[1].touched)[0];
+      const oldest = [...this.entries.entries()]
+        .filter(([source]) => source !== keep)
+        .sort((a, b) => a[1].touched - b[1].touched)[0];
       if (!oldest) return;
       this.retire(oldest[0], oldest[1]);
     }
@@ -135,7 +183,10 @@ export class PrivateMediaCache {
       entry.status = 'loading';
       const job = Symbol(source);
       this.running.add(job);
-      void this.download(source, entry).finally(() => { this.running.delete(job); this.pump(); });
+      void this.download(source, entry).finally(() => {
+        this.running.delete(job);
+        this.pump();
+      });
     }
   }
 
@@ -145,11 +196,25 @@ export class PrivateMediaCache {
     entry.controller = controller;
     const current = () => revision === this.revision && this.entries.get(source) === entry;
     try {
-      if (!Number.isInteger(entry.file.size) || entry.file.size <= 0 || entry.file.size > MAX_ATTACHMENT_BYTES) throw new Error('This file is unavailable.');
+      if (
+        !Number.isInteger(entry.file.size) ||
+        entry.file.size <= 0 ||
+        entry.file.size > MAX_ATTACHMENT_BYTES
+      )
+        throw new Error('This file is unavailable.');
       const blob = await withRequestDeadline(controller, 60000, async () => {
         const response = await this.fetchMedia(source, controller.signal);
-        if (!response.ok) throw new Error(response.status === 404 || response.status === 403 ? 'This file is no longer available.' : 'Unable to load this file. Please retry.');
-        if (response.headers.get('content-type')?.split(';')[0].trim() !== entry.file.type || Number(response.headers.get('content-length') ?? 0) > MAX_ATTACHMENT_BYTES) throw new Error('This file is unavailable.');
+        if (!response.ok)
+          throw new Error(
+            response.status === 404 || response.status === 403
+              ? 'This file is no longer available.'
+              : 'Unable to load this file. Please retry.',
+          );
+        if (
+          response.headers.get('content-type')?.split(';')[0].trim() !== entry.file.type ||
+          Number(response.headers.get('content-length') ?? 0) > MAX_ATTACHMENT_BYTES
+        )
+          throw new Error('This file is unavailable.');
         const reader = response.body?.getReader();
         if (!reader) throw new Error('This file is unavailable.');
         const chunks: Uint8Array<ArrayBuffer>[] = [];
@@ -158,7 +223,10 @@ export class PrivateMediaCache {
           const { done, value } = await reader.read();
           if (done) break;
           size += value.byteLength;
-          if (size > MAX_ATTACHMENT_BYTES || size > entry.file.size) { await reader.cancel(); throw new Error('This file is unavailable.'); }
+          if (size > MAX_ATTACHMENT_BYTES || size > entry.file.size) {
+            await reader.cancel();
+            throw new Error('This file is unavailable.');
+          }
           chunks.push(Uint8Array.from(value));
         }
         if (size !== entry.file.size) throw new Error('This file is unavailable.');
@@ -182,7 +250,7 @@ export class PrivateMediaCache {
   }
 
   private evict(keep: string) {
-    let ready = [...this.entries.entries()].filter(([, entry]) => entry.status === 'ready');
+    const ready = [...this.entries.entries()].filter(([, entry]) => entry.status === 'ready');
     let size = ready.reduce((sum, [, entry]) => sum + entry.file.size, 0);
     ready.sort((a, b) => a[1].touched - b[1].touched);
     while (size > this.budget.bytes || ready.length > this.budget.files) {
