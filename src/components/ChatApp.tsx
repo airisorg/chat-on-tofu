@@ -35,6 +35,7 @@ import {
   MessageCircle,
   MessageSquare,
   Pencil,
+  Paperclip,
   Pin,
   PictureInPicture2,
   Maximize2,
@@ -2123,7 +2124,7 @@ export default function ChatApp() {
                               userId={state.user.id}
                               conversation={conversation}
                             />
-                            <span>
+                            <span className="search-result-content">
                               <strong>{conversation.name}</strong>
                               <small>
                                 {conversation.lastMessage ||
@@ -2143,11 +2144,25 @@ export default function ChatApp() {
                     const c = state.conversations.find(
                       (c) => c.id === m.conversationId,
                     );
+                    const sentAt = new Date(m.createdAt);
+                    const fullDate = sentAt.toLocaleString([], {
+                      year: "numeric", month: "long", day: "numeric",
+                      hour: "numeric", minute: "2-digit",
+                    });
+                    const currentDate = new Date();
+                    const compactDate = sentAt.toDateString() === currentDate.toDateString()
+                      ? time(m.createdAt)
+                      : sentAt.toLocaleDateString([], {
+                          month: "short", day: "numeric",
+                          ...(sentAt.getFullYear() !== currentDate.getFullYear() ? { year: "numeric" as const } : {}),
+                        });
+                    const filenames = m.attachments.map((file) => file.name).join(", ");
                     return (
                       <button
                         key={m.id}
                         className="search-result"
                         aria-label={`Message from ${m.author.name} in ${c?.name || "conversation"}: ${m.text || m.attachments.map((file) => file.name).join(", ")}`}
+                        aria-description={`${fullDate}${filenames ? `; Attachments: ${filenames}` : ""}`}
                         onClick={() => {
                           if (c) openConversation(c);
                           setJumpTarget(m.parentId || m.id);
@@ -2156,23 +2171,22 @@ export default function ChatApp() {
                         }}
                       >
                         <Avatar person={m.author} />
-                        <span>
-                          <small>
-                            {m.author.name} · {c?.name}
-                          </small>
-                          <strong>
-                            {m.text ||
-                              m.attachments.map((file) => file.name).join(", ")}
-                          </strong>
-                          {m.text && m.attachments.length > 0 && (
-                            <small>
-                              {m.attachments
-                                .map((file) => file.name)
-                                .join(", ")}
-                            </small>
-                          )}
-                          <span>
-                            {dateLabel(m.createdAt)} · {time(m.createdAt)}
+                        <span className="search-result-content">
+                          <span className="search-result-heading">
+                            <span className="search-result-context" title={`${m.author.name} · ${c?.name || "conversation"}`}>
+                              {m.author.name} · {c?.name || "conversation"}
+                            </span>
+                            <time className="search-result-date" dateTime={m.createdAt} title={fullDate}>
+                              {compactDate}
+                            </time>
+                          </span>
+                          <span className="search-result-preview">
+                            <strong>{m.text || filenames}</strong>
+                            {m.text && m.attachments.length > 0 && (
+                              <span className="search-result-files" title={filenames} aria-hidden="true">
+                                <Paperclip size={14} />{m.attachments.length}
+                              </span>
+                            )}
                           </span>
                         </span>
                         <ChevronRight size={18} />
