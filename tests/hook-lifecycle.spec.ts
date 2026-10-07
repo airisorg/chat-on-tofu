@@ -12,9 +12,9 @@ declare global {
   }
 }
 
-// Bundle the actual hook/SDK into a disposable React root. This tests resource
-// cleanup that closing a browser document cannot establish. No production route,
-// identity, storage, database, or application implementation is substituted.
+// Bundle the actual hook/SDK into a disposable React root. The config, provider
+// and API responses use synthetic identities in isolated browser storage. These
+// checks establish client cleanup, not real provider/database or device behavior.
 let bundle: string;
 test.beforeAll(async () => {
   const output = await build({
@@ -112,7 +112,7 @@ test('guest hook refuses writes and unavailable sign-in without inventing a work
   expect(writes).toBe(0);
 });
 
-test('unmount aborts a pending bootstrap and remount ignores its late response', async ({
+test('unmount aborts a pending bootstrap and remount recovers after cancellation', async ({
   page,
 }) => {
   let release: (() => Promise<void>) | undefined;
@@ -304,6 +304,7 @@ test('unmount aborts snapshot work, leaves realtime and removes polling and visi
 test('revoked refresh session clears private state and remains a guest on later connectivity', async ({
   page,
 }) => {
+  await page.clock.install();
   await authenticated(page);
   let reject = false,
     gets = 0;
@@ -315,12 +316,16 @@ test('revoked refresh session clears private state and remains a guest on later 
   });
   await mount(page);
   await expect.poll(async () => (await view(page)).name).toBe('Private workspace');
+  await page.clock.pauseAt(new Date((await page.evaluate(() => Date.now())) + 1000));
   reject = true;
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
   await expect.poll(async () => (await view(page)).name).toBeNull();
   await expect(page.locator('output')).toContainText('Your session expired.');
   const before = gets;
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  // Observe beyond several poll periods; an immediate count can miss an async
+  // request incorrectly scheduled by the connectivity callback.
+  await page.clock.runFor(10000);
   await expect.poll(() => view(page)).toMatchObject({ name: null, loading: false });
   expect(gets).toBe(before);
 });
