@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './coverage-test';
 import { createDemoState, DEMO_STORAGE_KEY } from '../src/lib/demo';
 import { MAX_CONVERSATION_MEMBERS } from '../src/lib/chat-limits';
 

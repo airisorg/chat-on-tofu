@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './coverage-test';
 
 // Reviewed synthetic component baselines protect our renderer from drift.
 // Google reference parity is separately checked with measured DOM geometry;

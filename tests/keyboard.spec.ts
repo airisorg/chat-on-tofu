@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from './coverage-test';
 import { createDemoState, DEMO_STORAGE_KEY } from '../src/lib/demo';
 
 // Keep this contract mobile even when included by the shared desktop/platform

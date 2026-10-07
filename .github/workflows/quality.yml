@@ -32,6 +32,7 @@ jobs:
       - run: npm run test:coverage
       - run: npm audit --audit-level=moderate
       - run: npm run build
+      - run: npm run test:coverage:production-clean
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:
@@ -134,6 +135,8 @@ jobs:
       # Pixel baselines are macOS-specific; these suites assert behavior without
       # updating or weakening the separate macOS screenshot gate.
       - run: npm run test:security
+      - name: Assert avatar CSP without functional-coverage bypass
+        run: npx playwright test --config playwright.frontend-security.config.ts --grep 'image CSP permits Google avatar hosts'
       - run: npm run test:reliability
       - run: npm run test:offline
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -141,5 +144,89 @@ jobs:
         with:
           name: browser-failures
           path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  combined-runtime-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # Real original-source counters, zero-seeded unloaded inputs and unchanged
+      # assertions. Synthetic providers bypass CSP ONLY in this functional job.
+      # Production CSP/security and actual SW acceptance remain separate above;
+      # explicit portable --ignore-snapshots never updates macOS pixel baselines.
+      - run: npm run test:coverage:combined
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: combined-executable-coverage
+          path: |
+            test-results/combined-coverage/manifest.json
+            test-results/combined-coverage/coverage-summary.json
+            test-results/combined-coverage/coverage-final.json
+            test-results/combined-coverage/execution*.json
+            test-results/combined-coverage/browser-results.json
+            test-results/combined-coverage/server.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  landing-screenshot:
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      APP_URL: http://127.0.0.1:3100
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install chromium webkit
+      - name: Select the installed pinned Chromium for reviewed darwin goldens
+        run: |
+          node <<'NODE'
+          const {chromium} = require('playwright');
+          const {appendFileSync} = require('node:fs');
+          const {spawnSync} = require('node:child_process');
+          const executable = chromium.executablePath();
+          const version = spawnSync(executable, ['--version'], {encoding:'utf8'});
+          if(version.status !== 0) throw new Error('Installed Chromium version probe failed');
+          console.log(JSON.stringify({executable,version:version.stdout.trim()}));
+          appendFileSync(process.env.GITHUB_ENV, `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=${executable}\n`);
+          NODE
+      - run: NEXT_PUBLIC_ENABLE_DEMO=true npm run build
+      - run: npm run test:coverage:production-clean
+      - name: Serve the ordinary local landing build
+        run: |
+          npm start -- --hostname 127.0.0.1 --port 3100 > /tmp/chat-landing.log 2>&1 &
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent "$APP_URL" > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/chat-landing.log
+          exit 1
+      # All20 existing functional/visual cases; reviewed darwin baselines only.
+      # No --update-snapshots or --ignore-snapshots is permitted in this job.
+      - run: npx playwright test --config playwright.landing-preview.config.ts
+      - run: npx playwright test --config playwright.header-sidebar.config.ts
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: failure()
+        with:
+          name: landing-screenshot-failures
+          path: |
+            test-results/landing-preview/
+            test-results/header-sidebar/
           if-no-files-found: ignore
           retention-days: 7

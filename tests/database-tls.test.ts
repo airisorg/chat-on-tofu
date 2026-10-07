@@ -204,8 +204,16 @@ test('build connect/query/cleanup deadlines are bounded and fail publication', a
 });
 
 test('actual verification CLI skips an unconfigured local environment and fails a hosted one without a stack', () => {
+  // Preserve only the opt-in collector; never inherit provider/database configuration.
+  const coverageEnv = process.env.CHAT_COVERAGE_RUN_ID
+    ? Object.fromEntries(
+        ['NODE_OPTIONS', 'CHAT_COVERAGE_RUN_ID', 'CHAT_ISTANBUL_DIR', 'CHAT_COVERAGE_LAYER']
+          .filter((key) => process.env[key] !== undefined)
+          .map((key) => [key, process.env[key]]),
+      )
+    : {};
   const localRun = spawnSync(process.execPath, ['--import', 'tsx', 'scripts/verify-database.ts'], {
-    env: { NODE_ENV: 'test' },
+    env: { ...coverageEnv, NODE_ENV: 'test' },
     encoding: 'utf8',
     timeout: 5000,
   });
@@ -213,7 +221,7 @@ test('actual verification CLI skips an unconfigured local environment and fails 
   assert.match(localRun.stdout, /skipped: no local DATABASE_URL/);
   assert.equal(localRun.stderr, '');
   const hostedRun = spawnSync(process.execPath, ['--import', 'tsx', 'scripts/verify-database.ts'], {
-    env: { NODE_ENV: 'test', VERCEL: '1' },
+    env: { ...coverageEnv, NODE_ENV: 'test', VERCEL: '1' },
     encoding: 'utf8',
     timeout: 5000,
   });

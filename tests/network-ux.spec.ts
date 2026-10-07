@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { expect, test, type BrowserContext, type Page, type Route } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page, type Route } from './coverage-test';
 import type { ChatAction, ChatState, Person } from '../src/lib/types';
 
 // Deliberately fake auth and localhost route fixtures. This tests visible UI

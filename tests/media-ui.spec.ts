@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './coverage-test';
 import { readFileSync } from 'node:fs';
 
 function wav(seconds: number) {

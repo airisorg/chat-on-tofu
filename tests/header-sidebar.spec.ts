@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Locator, type TestInfo } from '@playwright/test';
+import { expect, test, type Page, type Locator, type TestInfo } from './coverage-test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createDemoState, DEMO_STORAGE_KEY } from '../src/lib/demo';
@@ -6,12 +6,20 @@ import { evidenceDirectory } from './browser-config';
 
 // App consistency and supported navigation checks. The 24px inset adapts measured
 // Google Home spacing, not an observed Google Space-header pixel oracle.
-async function fixture(page: Page, theme: 'light' | 'dark') {
+async function fixture(page: Page, theme: 'light' | 'dark', emptyCombinedDm = false) {
   const state = createDemoState();
+  if (emptyCombinedDm) {
+    state.conversations = state.conversations.filter(
+      (conversation) => conversation.kind === 'space',
+    );
+    const ids = new Set(state.conversations.map((conversation) => conversation.id));
+    state.messages = state.messages.filter((message) => ids.has(message.conversationId));
+  }
   await page.emulateMedia({ colorScheme: theme });
   await page.addInitScript(
     ({ key, state }) => {
       localStorage.setItem(key, JSON.stringify(state));
+      localStorage.removeItem('relay-chat-demo-choice-v1');
       localStorage.setItem('relay-theme', 'system');
     },
     { key: DEMO_STORAGE_KEY, state },
@@ -374,3 +382,178 @@ test.describe('coarse sidebar focus', () => {
     await hit(conversation);
   });
 });
+
+// Bounded app-consistency follow-up. These are own-app screenshot regressions,
+// not measured Google dark/focus or native-phone parity.
+async function disclosureBoxes(page: Page) {
+  const values = [];
+  for (const name of ['Shortcuts', 'Direct messages', 'Spaces']) {
+    values.push(
+      await sidebar(page)
+        .getByRole('button', { name, exact: true })
+        .evaluate((node) => {
+          const r = node.getBoundingClientRect();
+          return { y: r.y, height: r.height };
+        }),
+    );
+  }
+  return values;
+}
+async function collapseAllDisclosures(page: Page) {
+  for (const name of ['Shortcuts', 'Direct messages', 'Spaces']) {
+    const control = sidebar(page).getByRole('button', { name, exact: true });
+    await expect(control).toHaveCount(1);
+    if ((await control.getAttribute('aria-expanded')) === 'true') await control.click();
+    await expect(control).toHaveAttribute('aria-expanded', 'false');
+    await hit(control);
+  }
+}
+async function assertDisclosureColumns(page: Page, touch: boolean) {
+  const typography = await headings(page);
+  expect(typography).toHaveLength(3);
+  for (const style of typography) expect(style).toEqual(typography[0]);
+  expect(typography[0].family).toContain('Google Sans');
+  expect(typography[0].size).toBe('12px');
+  const origins = await headingGeometry(page);
+  expect(origins).toHaveLength(3);
+  for (const origin of origins) {
+    expect(origin.iconWidth).toBe(17);
+    expect(origin.gap).toBe(8);
+    expect(origin.iconX).toBe(origins[0].iconX);
+    expect(origin.labelX).toBe(origins[0].labelX);
+  }
+  if (touch)
+    for (const name of ['Shortcuts', 'Direct messages', 'Spaces']) {
+      const bounds = await hit(sidebar(page).getByRole('button', { name, exact: true }));
+      expect(bounds.width).toBeGreaterThanOrEqual(44);
+      expect(bounds.height).toBeGreaterThanOrEqual(44);
+    }
+}
+async function screenshotDisclosureGroups(page: Page, name: string) {
+  const bounds = await sidebar(page).evaluate((node) => {
+    const groups = [...node.querySelectorAll(':scope > nav,:scope > .sidebar-group')];
+    if (groups.length < 3) throw new Error('Three disclosure groups are required');
+    const first = groups[0].getBoundingClientRect();
+    const last = groups[2].getBoundingClientRect();
+    const side = node.getBoundingClientRect();
+    return {
+      x: side.x,
+      y: first.y - 4,
+      width: side.width,
+      height: last.bottom - first.y + 8,
+    };
+  });
+  await page.mouse.move(page.viewportSize()!.width - 10, 950);
+  await expect(page).toHaveScreenshot(name, {
+    clip: bounds,
+    animations: 'disabled',
+    caret: 'hide',
+    maxDiffPixels: 0,
+  });
+}
+for (const width of [800, 1440])
+  for (const touch of [false, true])
+    for (const theme of ['light', 'dark'] as const)
+      test.describe(`disclosure composition ${width}px ${touch ? 'coarse' : 'fine'} ${theme}`, () => {
+        test.use({ viewport: { width, height: 960 }, hasTouch: touch });
+        test('collapsed rhythm, empty-group origins and Shared containment remain explicit', async ({
+          page,
+        }) => {
+          await fixture(page, theme);
+          // Keep a controlled Home state before either crop; no dynamic timestamps appear.
+          await page
+            .getByRole('navigation')
+            .getByRole('button', { name: 'Home', exact: true })
+            .click();
+          const expandedBefore = await disclosureBoxes(page);
+          await collapseAllDisclosures(page);
+          await assertDisclosureColumns(page, touch);
+          const collapsed = await disclosureBoxes(page);
+          expect(collapsed[1].y - collapsed[0].y).toBe(touch ? 62 : 44);
+          expect(collapsed[2].y - collapsed[1].y).toBe(touch ? 62 : 44);
+          await screenshotDisclosureGroups(
+            page,
+            `collapsed-${width}-${touch ? 'coarse' : 'fine'}-${theme}.png`,
+          );
+          for (const name of ['Shortcuts', 'Direct messages', 'Spaces'])
+            await sidebar(page).getByRole('button', { name, exact: true }).click();
+          expect(await disclosureBoxes(page)).toEqual(expandedBefore);
+          // A real combined DM/group empty state on a fresh page. The original
+          // page's initialization script must not overwrite an edited fixture on reload.
+          const samplePage = await page.context().newPage();
+          await fixture(samplePage, theme, true);
+          const directGroup = sidebar(samplePage)
+            .locator('.sidebar-group')
+            .filter({
+              has: samplePage.getByRole('button', {
+                name: 'Direct messages',
+                exact: true,
+              }),
+            });
+          await expect(directGroup).toHaveCount(1);
+          await expect(directGroup.locator('.sidebar-conversation')).toHaveCount(0);
+          await expect(
+            sidebar(samplePage)
+              .locator('.sidebar-group')
+              .filter({
+                has: samplePage.getByRole('button', { name: 'Spaces', exact: true }),
+              })
+              .locator('.sidebar-conversation'),
+          ).toHaveCount(2);
+          await assertDisclosureColumns(samplePage, touch);
+          await screenshotDisclosureGroups(
+            samplePage,
+            `empty-group-${width}-${touch ? 'coarse' : 'fine'}-${theme}.png`,
+          );
+          // Shared remains the existing details action; this check fixes only containment.
+          await sidebar(samplePage)
+            .getByRole('button', { name: 'Design team', exact: true })
+            .click();
+          const strip = full(samplePage).locator('.conversation-tabs');
+          const shared = strip.getByRole('button', {
+            name: 'Shared',
+            exact: true,
+          });
+          await expect(strip).toHaveCount(1);
+          await expect(shared).toHaveCount(1);
+          const outer = (await strip.boundingBox())!;
+          const control = await hit(shared);
+          const inner = (await shared.boundingBox())!;
+          expect(inner.y).toBeGreaterThanOrEqual(outer.y);
+          expect(inner.y + inner.height).toBeLessThanOrEqual(outer.y + outer.height - 1);
+          expect(outer.height).toBe(touch ? 45 : 42);
+          if (touch) expect(control.height).toBeGreaterThanOrEqual(44);
+          await expect(strip).toHaveScreenshot(
+            `shared-strip-${width}-${touch ? 'coarse' : 'fine'}-${theme}.png`,
+            { animations: 'disabled', caret: 'hide', maxDiffPixels: 0 },
+          );
+        });
+      });
+for (const theme of ['light', 'dark'] as const)
+  test.describe(`799px hidden sidebar ${theme}`, () => {
+    test.use({ viewport: { width: 799, height: 960 }, hasTouch: true });
+    test('compact state has no visible desktop sidebar disclosure', async ({ page }) => {
+      await fixture(page, theme);
+      await expect(page.locator('.sidebar')).toBeHidden();
+      await expect(
+        page.getByRole('navigation', { name: 'Main navigation', exact: true }),
+      ).toBeVisible();
+      await page.getByRole('button', { name: 'Home', exact: true }).click();
+      const row = page.locator('.conversation-row').filter({ hasText: 'Design team' });
+      await expect(row).toHaveCount(1);
+      await row.click();
+      const strip = full(page).locator('.conversation-tabs');
+      const shared = strip.getByRole('button', { name: 'Shared', exact: true });
+      const outer = (await strip.boundingBox())!;
+      const target = await hit(shared);
+      const inner = (await shared.boundingBox())!;
+      expect(outer.height).toBe(45);
+      expect(target.height).toBeGreaterThanOrEqual(44);
+      expect(inner.y + inner.height).toBeLessThanOrEqual(outer.y + outer.height - 1);
+      await expect(strip).toHaveScreenshot(`shared-compact-boundary-799-${theme}.png`, {
+        animations: 'disabled',
+        caret: 'hide',
+        maxDiffPixels: 0,
+      });
+    });
+  });

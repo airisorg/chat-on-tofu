@@ -1,4 +1,11 @@
-import { expect, test, type Page, type Browser, type Locator } from '@playwright/test';
+import {
+  expect,
+  test,
+  captureBeforeNavigation,
+  type Page,
+  type Browser,
+  type Locator,
+} from './coverage-test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { deflateSync } from 'node:zlib';
@@ -774,55 +781,59 @@ test.describe('landscape keyboard contraction', () => {
   });
 });
 
-test('installed-mode Google sign-in derives the broker return from this app origin', async ({
-  page,
-  baseURL,
-}) => {
-  await page.addInitScript(() =>
-    Object.defineProperty(navigator, 'standalone', {
-      configurable: true,
-      value: true,
-    }),
-  );
-  await page.route('**/api/config', (route) =>
-    route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({
-        supabaseUrl: 'https://auth.example.test',
-        supabaseAnonKey: 'public-test-key',
-        databaseConfigured: true,
+for (const signInInput of ['click', 'Enter'] as const) {
+  test(`installed-mode Google sign-in derives the broker return from this app origin via ${signInInput}`, async ({
+    page,
+    baseURL,
+  }) => {
+    await page.addInitScript(() =>
+      Object.defineProperty(navigator, 'standalone', {
+        configurable: true,
+        value: true,
       }),
-    }),
-  );
-  let broker = '';
-  // This intercepts the outbound navigation. It never contacts Tofu or Google
-  // and does not establish Safari's physical standalone-context behavior.
-  await page.route('https://oauth.trytofu.ai/start?*', (route) => {
-    broker = route.request().url();
-    return route.fulfill({
-      contentType: 'text/html',
-      body: '<p>Intercepted sign-in navigation</p>',
+    );
+    await page.route('**/api/config', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          supabaseUrl: 'https://auth.example.test',
+          supabaseAnonKey: 'public-test-key',
+          databaseConfigured: true,
+        }),
+      }),
+    );
+    let broker = '';
+    // This intercepts the outbound navigation. It never contacts Tofu or Google
+    // and does not establish Safari's physical standalone-context behavior.
+    await page.route('https://oauth.trytofu.ai/start?*', (route) => {
+      broker = route.request().url();
+      return route.fulfill({
+        contentType: 'text/html',
+        body: '<p>Intercepted sign-in navigation</p>',
+      });
     });
+    await page.goto('/');
+    const signIn = page.getByRole('button', {
+      name: 'Continue with Google',
+      exact: true,
+    });
+    await expect(signIn).toBeEnabled();
+    await captureBeforeNavigation(page);
+    if (signInInput === 'click') await signIn.click();
+    else await signIn.press('Enter');
+    await expect.poll(() => broker).not.toBe('');
+    const url = new URL(broker);
+    expect(url.origin).toBe('https://oauth.trytofu.ai');
+    const callback = new URL(url.searchParams.get('return')!);
+    expect(callback.origin).toBe(new URL(baseURL!).origin);
+    expect(callback.pathname).toBe('/');
+    expect(callback.hash).toBe('');
+    expect(callback.searchParams.get('chat_login_nonce')).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+    expect([...callback.searchParams.keys()]).toEqual(['chat_login_nonce']);
   });
-  await page.goto('/');
-  const signIn = page.getByRole('button', {
-    name: 'Continue with Google',
-    exact: true,
-  });
-  await expect(signIn).toBeEnabled();
-  await signIn.click();
-  await expect.poll(() => broker).not.toBe('');
-  const url = new URL(broker);
-  expect(url.origin).toBe('https://oauth.trytofu.ai');
-  const callback = new URL(url.searchParams.get('return')!);
-  expect(callback.origin).toBe(new URL(baseURL!).origin);
-  expect(callback.pathname).toBe('/');
-  expect(callback.hash).toBe('');
-  expect(callback.searchParams.get('chat_login_nonce')).toMatch(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-  );
-  expect([...callback.searchParams.keys()]).toEqual(['chat_login_nonce']);
-});
+}
 
 test('real M4A picker alias sends as canonical MP4 audio, decodes and survives reload', async ({
   page,

@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from './coverage-test';
 
 // Reviewed app baselines, not Google pixel-parity evidence. Geometry and hit
 // assertions run before snapshots so a new baseline cannot hide inaccessible UI.

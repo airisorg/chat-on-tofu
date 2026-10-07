@@ -1,4 +1,4 @@
-import { expect, test, type Page, type BrowserContext } from '@playwright/test';
+import { expect, test, type Page, type BrowserContext } from './coverage-test';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';

@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page } from './coverage-test';
 import type { ChatState } from '../src/lib/types';
 import { draftSavingKey, savedDraftsKey } from '../src/lib/draft-preference';
 import { LOGIN_NONCE_QUERY, LOGIN_REQUEST_KEY } from '../src/lib/login-callback';

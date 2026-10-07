@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
+import { expect, test, type Locator, type Page, type TestInfo } from './coverage-test';
 import { evidenceDirectory } from './browser-config';
 
 // Local synthetic composition only; no hosted identity, OS keyboard, database

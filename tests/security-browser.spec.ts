@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './coverage-test';
 
 test('production document hydrates with unique request nonces and blocks a parser-injected script', async ({
   page,
