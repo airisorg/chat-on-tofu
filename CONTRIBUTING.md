@@ -12,7 +12,9 @@ lists fast, SQL, native and browser layers without pretending discovery is execu
 
 CI runs unit/SQL coverage, lint, formatting, type checks, a production build,
 dependency advisories and selected functional browser tests. A separate security
-workflow scans reachable Git history and JavaScript/TypeScript with CodeQL.
+workflow scans reachable Git history and the checked-out tree. GitHub-managed
+CodeQL default setup separately analyzes JavaScript/TypeScript in this repository;
+fork owners must enable code scanning for their own fork.
 Native PostgreSQL tests and the complete macOS screenshot gate still require
 their documented local runs. CI never receives production credentials.
 

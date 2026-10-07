@@ -74,7 +74,7 @@ For an intentionally unbound diagnostic, invoke the selected native test directl
 
 ## Continuous integration
 
-Every pull request and push to `main` runs the committed GitHub Actions workflows:
+Pull requests and pushes to `main` run the committed quality/security workflows. The repository also has GitHub-managed CodeQL default setup enabled:
 
 | Job                          | What it verifies                                                                                                                                                                              |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -82,7 +82,9 @@ Every pull request and push to `main` runs the committed GitHub Actions workflow
 | Quality / native-integration | Fresh compiled API against disposable PostgreSQL 16 and synthetic HTTPS identities, verified TLS, concurrent writes, invitation ownership, quotas, private upload/download and retry receipts |
 | Quality / browser            | Chromium and WebKit functional security, recovery and offline-shell flows against an isolated production server                                                                               |
 | Security / secrets           | Reachable Git history and checked-out source with checksum-pinned Gitleaks                                                                                                                    |
-| Security / codeql            | JavaScript/TypeScript static analysis with CodeQL                                                                                                                                             |
+| CodeQL default setup         | Existing GitHub-managed JavaScript/TypeScript analysis on changes and its weekly schedule                                                                                                     |
+
+CodeQL uses the repository's existing default setup. Do not add an advanced CodeQL workflow alongside it: default setup blocks those analysis uploads. Fork owners must enable CodeQL for their own repository.
 
 Native integration runs as the ordinary Ubuntu runner user. It creates only its
 own temporary clusters on loopback ports, verifies the build's source hashes
