@@ -72,6 +72,34 @@ The hash inventory includes source, assets, tests and configuration; it is a fro
 
 For an intentionally unbound diagnostic, invoke the selected native test directly with `npx tsx --test`. Its `prebuiltSourceVerification` field remains unverified without the external binding. A diagnostic cannot replace the acceptance sequence above.
 
+## Continuous integration
+
+Every pull request and push to `main` runs the committed GitHub Actions workflows:
+
+| Job                          | What it verifies                                                                                                                                                                              |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Quality / checks             | Locked install, formatting, lint, TypeScript, all non-native Node/SQL tests with all-source coverage floors, dependency advisories and production build                                       |
+| Quality / native-integration | Fresh compiled API against disposable PostgreSQL 16 and synthetic HTTPS identities, verified TLS, concurrent writes, invitation ownership, quotas, private upload/download and retry receipts |
+| Quality / browser            | Chromium and WebKit functional security, recovery and offline-shell flows against an isolated production server                                                                               |
+| Security / secrets           | Reachable Git history and checked-out source with checksum-pinned Gitleaks                                                                                                                    |
+| Security / codeql            | JavaScript/TypeScript static analysis with CodeQL                                                                                                                                             |
+
+Native integration runs as the ordinary Ubuntu runner user. It creates only its
+own temporary clusters on loopback ports, verifies the build's source hashes
+before starting, and stops/removes those clusters afterward. It does not use a
+shared service database or any production secret. Only sanitized JSON proof,
+the test log and source/build binding are uploaded; private fixture keys and
+database directories are excluded. Uploaded coverage and proof artifacts expire
+after seven days; workflow logs follow the repository's retention setting.
+
+Run the same unit/SQL gate locally with `npm run test:coverage`, or select
+`npm run test:unit:fast` and `npm run test:sql` while iterating. The native command
+above accepts `CHAT_NATIVE_PG_BIN` and `CHAT_NATIVE_OPENSSL` for Linux tool paths.
+The complete macOS screenshot inventory remains a separate local release gate:
+CI functional passes do not approve platform-specific pixels. Configure required
+branch checks after their first successful run; a workflow file alone does not
+enforce branch protection.
+
 ## Visual assertions before baselines
 
 The Home toolbar and dialog suites use actual `toHaveScreenshot` assertions in Chrome and WebKit, with reviewed macOS goldens. Home covers both themes, view widths, unread/filter/split states, hover and keyboard focus. Dialogs cover Settings, the draft preference, Profile presets/focus and availability. Existing visual cases cover other selected app states. Run the relevant suite without `--update-snapshots` after review.
