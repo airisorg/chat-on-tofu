@@ -34,6 +34,8 @@ test('production policy rejects unsafe provider origins and excludes development
   assert.match(policy, /connect-src 'self' https:\/\/identity\.example wss:\/\/identity\.example;/);
   assert.match(policy, /script-src 'self' 'nonce-test-nonce' 'strict-dynamic';/);
   assert.doesNotMatch(policy, /unsafe-eval/);
+  const images = policy.split(';').find(rule => rule.trim().startsWith('img-src'))!.trim().split(/\s+/);
+  assert.deepEqual(images, ['img-src', "'self'", 'data:', 'blob:', 'https://googleusercontent.com', 'https://*.googleusercontent.com', 'https://gstatic.com', 'https://*.gstatic.com']);
   assert.doesNotMatch(policy.split(';').find(rule => rule.trim().startsWith('script-src'))!, /unsafe-inline/);
   for (const origin of ['http://identity.example', 'https://user:pass@identity.example', 'javascript:alert(1)']) {
     assert.equal(contentSecurityPolicy('nonce', origin).split(';').find(rule => rule.trim().startsWith('connect-src'))?.trim(), "connect-src 'self'");

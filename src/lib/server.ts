@@ -1,6 +1,7 @@
 import { createClient, type User } from '@supabase/supabase-js';
 import postgres from 'postgres';
 import { createHash } from 'node:crypto';
+import { databaseTls } from './database-tls';
 import type { Attachment, ChatAction, ChatState, Message, Person } from './types';
 import { ACTION_RETRY_WINDOW_MS, MAX_RECENT_ACTIONS, canonicalJson } from './action-identity';
 import { MAX_CONVERSATION_MEMBERS } from './chat-limits';
@@ -176,7 +177,7 @@ export async function applySchema(sql: postgres.Sql): Promise<void> {
 async function database(): Promise<postgres.Sql> {
   const url = process.env.DATABASE_URL;
   if (!url) throw new ChatError('The chat database is not connected yet.', 503);
-  db ??= postgres(url, { ssl: process.env.NODE_ENV === 'production' ? 'require' : undefined, max: 3, prepare: false, idle_timeout: 20, connect_timeout: 15 });
+  db ??= postgres(url, { ssl: databaseTls(url), max: 3, prepare: false, idle_timeout: 20, connect_timeout: 15 });
   if (!migration) {
     const pending = applySchema(db);
     migration = pending;
@@ -609,9 +610,32 @@ export async function getChatResult(user: User, clientActionId?: string, serverC
   });
 }
 
+const ACTION_FIELDS = {
+  send: ['conversationId', 'text', 'parentId', 'attachments', 'clientMessageId'],
+  edit: ['messageId', 'text'],
+  delete: ['messageId'],
+  react: ['messageId', 'emoji', 'active'],
+  star: ['messageId', 'starred'],
+  read: ['conversationId', 'unread'],
+  create: ['name', 'kind', 'emails', 'description'],
+  conversation: ['conversationId', 'name', 'description', 'pinned', 'muted', 'section'],
+  invite: ['conversationId', 'emails'],
+  leave: ['conversationId'],
+  profile: ['name', 'status'],
+} satisfies Record<ChatAction['type'], readonly string[]>;
+
+function actionInput(input: unknown): ChatAction {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || !('type' in input) || typeof input.type !== 'string' || !Object.hasOwn(ACTION_FIELDS, input.type)) throw new ChatError('Choose a valid action.');
+  const fields: readonly string[] = ACTION_FIELDS[input.type as ChatAction['type']];
+  // A TypeScript cast does not remove surplus properties in incoming JSON.
+  // Keep the current client contract and reject unsupported action fields.
+  const allowed = new Set(['type', 'clientActionId', 'clientActionCreatedAt', ...fields]);
+  if (Object.keys(input).some(key => !allowed.has(key))) throw new ChatError('This action contains unsupported fields.');
+  return input as ChatAction;
+}
+
 export async function mutateChat(user: User, input: unknown, serverConnection?: postgres.Sql): Promise<{ state: ChatState; id?: string; actionId?: string }> {
-  if (!input || typeof input !== 'object' || !('type' in input)) throw new ChatError('Choose a valid action.');
-  const action = input as ChatAction;
+  const action = actionInput(input);
   const actionId = action.type !== 'send' && action.clientActionId !== undefined ? uuid(action.clientActionId) : undefined;
   let expiresAt: string | undefined;
   let digest: string | undefined;
@@ -645,6 +669,7 @@ export async function mutateChat(user: User, input: unknown, serverConnection?: 
       case 'send': {
         const conversationId = uuid(action.conversationId);
         await membership(tx, conversationId, userId);
+        changedConversationId = conversationId;
         id = action.clientMessageId === undefined ? crypto.randomUUID() : uuid(action.clientMessageId);
         let prior: Record<string, unknown> | undefined;
         if (action.clientMessageId !== undefined) {
@@ -735,11 +760,13 @@ export async function mutateChat(user: User, input: unknown, serverConnection?: 
         await tx`insert into relay.conversations (id,name,kind,description,creator_id) values (${id},${name},${action.kind},${description},${userId})`;
         await tx`insert into relay.participants (conversation_id,user_id) values (${id},${userId})`;
         await invite(tx, id, invited);
+        changedConversationId = id;
         break;
       }
       case 'conversation': {
         const conversationId = uuid(action.conversationId);
         await membership(tx, conversationId, userId);
+        changedConversationId = conversationId;
         if (action.name !== undefined) await tx`update relay.conversations set name=${text(action.name, 80, 'Conversation name')} where id=${conversationId}`;
         if (action.description !== undefined) await tx`update relay.conversations set description=${text(action.description, 500, 'Description', true)} where id=${conversationId}`;
         if (action.pinned !== undefined) await tx`update relay.participants set pinned=${bool(action.pinned)} where conversation_id=${conversationId} and user_id=${userId}`;
@@ -750,6 +777,7 @@ export async function mutateChat(user: User, input: unknown, serverConnection?: 
       case 'invite': {
         const conversationId = uuid(action.conversationId);
         const conversation = await membership(tx, conversationId, userId);
+        changedConversationId = conversationId;
         if (conversation.kind === 'dm') throw new ChatError('Create a group to add more people.');
         await invite(tx, conversationId, emails(action.emails));
         break;
@@ -757,6 +785,7 @@ export async function mutateChat(user: User, input: unknown, serverConnection?: 
       case 'leave': {
         const conversationId = uuid(action.conversationId);
         await membership(tx, conversationId, userId);
+        changedConversationId = conversationId;
         await tx`delete from relay.participants where conversation_id=${conversationId} and user_id=${userId}`;
         await tx`delete from relay.invites where conversation_id=${conversationId} and email=${user.email!.toLowerCase()}`;
         await tx`delete from relay.uploads where conversation_id=${conversationId} and owner_id=${userId}`;
@@ -769,7 +798,9 @@ export async function mutateChat(user: User, input: unknown, serverConnection?: 
       default: throw new ChatError('Choose a valid action.');
     }
     if (action.type !== 'read') {
-      const conversationId = 'conversationId' in action ? action.conversationId : changedConversationId ?? (action.type === 'create' ? id : undefined);
+      // Only the selected branch's validated, authorized resource determines
+      // recipients. Profile updates have no conversation target.
+      const conversationId = changedConversationId;
       const personal = action.type === 'star' || (action.type === 'conversation' && action.name === undefined && action.description === undefined);
       if (personal) await tx`insert into relay.events(id,user_id,conversation_id) values (${crypto.randomUUID()},${userId},${conversationId ?? null})`;
       else if (conversationId) await tx`insert into relay.events(id,user_id,conversation_id)

@@ -126,6 +126,10 @@ test("all catalog categories work, tab arrows navigate and search finds keywords
     const tab = picker.getByRole("tab", { name, exact: true });
     await tab.click();
     await expect(tab).toHaveAttribute("aria-selected", "true");
+    const panel = picker.getByRole("tabpanel", { name, exact: true });
+    await expect(panel).toBeVisible();
+    expect(await tab.getAttribute("aria-controls")).toBe(await panel.getAttribute("id"));
+    expect(await panel.getAttribute("aria-labelledby")).toBe(await tab.getAttribute("id"));
     expect(await picker.locator("[data-emoji-id]").count()).toBeGreaterThan(70);
   }
   await expect(picker.locator('[data-emoji-id="flag-gr"]')).toHaveText("🇬🇷");
@@ -136,7 +140,12 @@ test("all catalog categories work, tab arrows navigate and search finds keywords
     picker.getByRole("tab", { name: "Symbols", exact: true }),
   ).toBeFocused();
   const search = picker.getByRole("textbox", { name: "Search emoji" });
+  await search.fill("   ");
+  await expect(picker.getByRole("tab", { name: "Symbols", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(picker.getByRole("tabpanel", { name: "Symbols", exact: true })).toBeVisible();
   await search.fill("melting");
+  await expect(picker.getByRole("region", { name: "Emoji search results", exact: true })).toBeVisible();
+  await expect(picker.getByRole("tabpanel")).toHaveCount(0);
   await expect(picker.locator('[data-emoji-id="melting_face"]')).toHaveText(
     "🫠",
   );
@@ -148,6 +157,7 @@ test("all catalog categories work, tab arrows navigate and search finds keywords
   ).toBeVisible();
   await picker.getByRole("button", { name: "Clear emoji search" }).click();
   await expect(search).toHaveValue("");
+  await expect(picker.getByRole("tabpanel", { name: "Symbols", exact: true })).toBeVisible();
   await picker.getByRole("tab", { name: "Food & drink", exact: true }).click();
   const first = picker.locator("[data-emoji-id]").first();
   await first.focus();

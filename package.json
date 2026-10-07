@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "tsx scripts/verify-database.ts && next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test:backend": "tsx --test tests/backend.test.ts tests/database.test.ts",

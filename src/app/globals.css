@@ -4203,6 +4203,58 @@ button:hover {
     bottom: auto;
   }
 }
+
+/* Comfortable direct-message presentation. The caller explicitly opts in,
+   so space, search and thread rows retain their existing sender layout. */
+.message.dm-message .message-text {
+  max-width: 100%;
+  padding: 8px 12px;
+  border-radius: 20px;
+  background: var(--surface-soft);
+  color: var(--ink);
+}
+.message.dm-message .message-text:empty {
+  display: none;
+}
+.message.dm-own {
+  justify-content: flex-end;
+}
+.message.dm-own .message-body {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  width: fit-content;
+  max-width: 85%;
+}
+.message.dm-own .message-meta {
+  justify-content: flex-end;
+  padding-right: 0;
+}
+.message.dm-own .message-text {
+  background: var(--blue-soft);
+}
+.message.dm-own .message-attachments,
+.message.dm-own .reaction-list {
+  max-width: 100%;
+  justify-content: flex-end;
+}
+.message.dm-own .dm-own-author {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+@media (max-width: 767px), (pointer: coarse) {
+  .message.dm-own .message-meta {
+    min-height: 36px;
+    padding-right: 44px;
+  }
+}
 @media (min-width: 800px) and (max-height: 400px) and (pointer: fine) {
   .composer-viewport .composer > textarea {
     max-height: 56px;

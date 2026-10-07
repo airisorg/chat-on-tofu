@@ -55,6 +55,7 @@ import {
 import { useChat } from "@/lib/use-chat";
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from "@/lib/media-limits";
 import { restoreDraftMap, type DraftMap } from "@/lib/draft-storage";
+import { draftSavingKey, readDraftSaving, savedDraftsKey, writeDraftSaving } from "@/lib/draft-preference";
 import VoiceRecorder from "./VoiceRecorder";
 import InstallHelp from "./InstallHelp";
 import ContextPopover from "./ContextPopover";
@@ -392,6 +393,8 @@ export default function ChatApp() {
     attachments: Attachment[];
   }>>({});
   const [draftStorageIssue, setDraftStorageIssue] = useState<"attachments" | "all" | null>(null);
+  const [saveDrafts, setSaveDrafts] = useState(true);
+  const draftRetention = useRef<{ owner: string | null; enabled: boolean }>({ owner: null, enabled: true });
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [theme, setTheme] = useState("system");
@@ -540,6 +543,12 @@ export default function ChatApp() {
     }
     previousUser.current = userId;
     draftOwner.current = userId;
+    let enabled = true;
+    if (userId) {
+      try { enabled = readDraftSaving(userId, localStorage); } catch {}
+    }
+    draftRetention.current = { owner: userId, enabled };
+    setSaveDrafts(enabled);
     setRenderedDraftOwner(userId);
     draftMap.current = {};
     threadDraftMap.current = {};
@@ -569,7 +578,8 @@ export default function ChatApp() {
     setModal(null);
     if (userId && state) {
       try {
-        draftMap.current = restoreDraftMap(localStorage.getItem(`relay-drafts:${userId}`), state.conversations);
+        if (enabled) draftMap.current = restoreDraftMap(localStorage.getItem(savedDraftsKey(userId)), state.conversations);
+        else localStorage.removeItem(savedDraftsKey(userId));
       } catch {}
       let invitation = "";
       try {
@@ -604,7 +614,15 @@ export default function ChatApp() {
     }
   }, [state]);
   function persistDrafts(owner: string) {
+    if (draftOwner.current !== owner || draftRetention.current.owner !== owner || !draftRetention.current.enabled) return;
     try {
+      // Another tab can opt this account out before its storage event arrives.
+      if (!readDraftSaving(owner, localStorage)) {
+        draftRetention.current.enabled = false;
+        setSaveDrafts(false);
+        setDraftStorageIssue(null);
+        return;
+      }
       localStorage.setItem(
         `relay-drafts:${owner}`,
         JSON.stringify(draftMap.current),
@@ -629,6 +647,45 @@ export default function ChatApp() {
       }
     }
   }
+  function changeDraftSaving(enabled: boolean) {
+    const owner = state?.user.id;
+    if (!owner || currentUserNow.current !== owner || draftOwner.current !== owner) return;
+    draftRetention.current = { owner, enabled };
+    setSaveDrafts(enabled);
+    setDraftStorageIssue(null);
+    let result = { preferenceSaved: false, savedDraftsRemoved: false };
+    try { result = writeDraftSaving(owner, enabled, localStorage); } catch {}
+    if (enabled && !result.preferenceSaved) {
+      draftRetention.current.enabled = false;
+      setSaveDrafts(false);
+      setToast("Draft saving could not be enabled. Your current drafts remain available for this visit.");
+      return;
+    }
+    if (enabled) persistDrafts(owner);
+    if (!result.preferenceSaved || (!enabled && !result.savedDraftsRemoved)) {
+      setToast(!enabled && !result.savedDraftsRemoved
+        ? "Draft saving is off for this visit, but saved copies could not be cleared. Check this site’s browser data."
+        : "Your choice applies to this visit, but could not be saved for future visits.");
+    } else if (!enabled) setToast("Draft saving is off. Current drafts stay available for this visit.");
+  }
+  useEffect(() => {
+    const owner = state?.user.id;
+    if (!owner) return;
+    const changed = (event: StorageEvent) => {
+      if (event.key !== draftSavingKey(owner) || currentUserNow.current !== owner || draftOwner.current !== owner) return;
+      try {
+        if (event.storageArea !== localStorage) return;
+        const enabled = readDraftSaving(owner, localStorage);
+        draftRetention.current = { owner, enabled };
+        setSaveDrafts(enabled);
+        setDraftStorageIssue(null);
+        if (enabled) persistDrafts(owner);
+        else localStorage.removeItem(savedDraftsKey(owner));
+      } catch { /* Active drafts remain available if storage is inaccessible. */ }
+    };
+    window.addEventListener("storage", changed);
+    return () => window.removeEventListener("storage", changed);
+  }, [state?.user.id]);
   useEffect(() => {
     if (
       !selectedId ||
@@ -1128,19 +1185,20 @@ export default function ChatApp() {
   function showMessage(message: Message) {
     setModal({ type: "message", message });
   }
-  function messageRow(message: Message, compact = false, idPrefix = "") {
+  function messageRow(message: Message, compact = false, idPrefix = "", presentation: "standard" | "dm" = "standard") {
+    const ownDm = presentation === "dm" && message.author.id === state?.user.id;
     const count =
       state?.messages.filter((m) => m.parentId === message.id).length || 0;
     return (
       <article
         id={`${idPrefix}message-${message.id}`}
-        className={`message ${jumpTarget === message.id ? "message-highlight" : ""} ${compact ? "compact-message" : ""}`}
+        className={`message ${jumpTarget === message.id ? "message-highlight" : ""} ${compact ? "compact-message" : ""} ${presentation === "dm" ? "dm-message" : ""} ${ownDm ? "dm-own" : ""}`}
         key={message.id}
       >
-        <Avatar person={message.author} />
+        {!ownDm && <Avatar person={message.author} />}
         <div className="message-body">
           <div className="message-meta">
-            <strong>{message.author.name}</strong>
+            <strong className={ownDm ? "dm-own-author" : undefined}>{message.author.name}</strong>
             <time dateTime={message.createdAt}>{time(message.createdAt)}</time>
             {message.edited && <span className="edited">Edited</span>}
             {message.starred && <Star size={13} className="star-fill" />}
@@ -2075,7 +2133,7 @@ export default function ChatApp() {
                       <span>{dateLabel(m.createdAt)}</span>
                     </div>
                   )}
-                  {messageRow(m)}
+                  {messageRow(m, false, "", selected.kind === "dm" ? "dm" : "standard")}
                 </div>
               ))}
               {!messages.length && (
@@ -2515,7 +2573,7 @@ export default function ChatApp() {
         offline={chat.offline}
         pending={miniPendingIds.includes(miniConversation.id)}
         currentUserId={state.user.id}
-        renderMessage={message => messageRow(message, true, "mini-")}
+        renderMessage={message => messageRow(message, true, "mini-", miniConversation.kind === "dm" ? "dm" : "standard")}
         onDraft={updateMiniDraft}
         onSend={sendMini}
         onMinimize={() => setMiniMinimized(true)}
@@ -2804,6 +2862,27 @@ export default function ChatApp() {
                   <option value="light">Light</option>
                   <option value="dark">Dark</option>
                 </select>
+              </div>
+              <div className="setting-row">
+                <span>
+                  <File size={21} />
+                  <span>
+                    <strong>Save drafts on this device</strong>
+                    <small>{saveDrafts
+                      ? "Draft text and files are stored in this browser. Turn off on shared devices."
+                      : "Drafts stay available for this visit. They won’t be restored after a reload."}</small>
+                  </span>
+                </span>
+                <button
+                  className="text-button"
+                  role="switch"
+                  style={{ minWidth: 44, flexShrink: 0 }}
+                  aria-label="Save drafts on this device"
+                  aria-checked={saveDrafts}
+                  onClick={() => changeDraftSaving(!saveDrafts)}
+                >
+                  {saveDrafts ? "On" : "Off"}
+                </button>
               </div>
               <div className="setting-row">
                 <span>

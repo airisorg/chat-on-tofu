@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import {
   Car,
   Clock3,
@@ -128,6 +128,7 @@ export default function EmojiPicker({
   compact?: boolean;
 }) {
   const [query, setQuery] = useState("");
+  const panelId = useId();
   const [category, setCategory] = useState("people");
   const [preferences, setPreferences] = useState(() =>
     readPreferences(currentUserId),
@@ -379,9 +380,11 @@ export default function EmojiPicker({
             key={id}
             type="button"
             role="tab"
+            id={`${panelId}-${id}`}
+            aria-controls={panelId}
             aria-label={name}
             title={name}
-            aria-selected={!query && category === id}
+            aria-selected={!query.trim() && category === id}
             tabIndex={category === id ? 0 : -1}
             onClick={() => {
               setQuery("");
@@ -415,7 +418,14 @@ export default function EmojiPicker({
           </button>
         ))}
       </div>
-      <div ref={body} className={styles.body}>
+      <div
+        ref={body}
+        id={panelId}
+        className={styles.body}
+        role={query.trim() ? "region" : "tabpanel"}
+        aria-labelledby={query.trim() ? undefined : `${panelId}-${category}`}
+        aria-label={query.trim() ? "Emoji search results" : undefined}
+      >
         {query.trim() ? (
           <section aria-label="Search results">
             <h3 aria-live="polite">Search results · {matches.length}</h3>

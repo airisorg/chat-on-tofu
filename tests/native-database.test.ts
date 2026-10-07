@@ -3,6 +3,8 @@ import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type postgres from 'postgres';
+import { databaseTls } from '../src/lib/database-tls';
+import { verifyDatabase } from '../scripts/verify-database';
 import { applySchema, ChatError, enforceRequestLimit, getAttachment, getChat, mutateChat, stageUpload, type UploadChunk } from '../src/lib/server';
 import { advisoryBarrier, fixtureUser, nativeCluster, nativeEnabled, nativeSkip, recordNativeEvidence, until } from './helpers/native-postgres';
 
@@ -22,15 +24,20 @@ test('opt-in native PostgreSQL concurrency, TLS, memberships and immutable stagi
     assert.equal((await admin`select ssl from pg_stat_ssl where pid=pg_backend_pid()`)[0].ssl, true);
     await applySchema(admin);
     const version = String((await admin`select version()`)[0].version).split(',')[0];
-    await t.test('TLS require encrypts but does not authenticate an untrusted certificate; explicit CA verification does', async () => {
+    await t.test('strict runtime TLS and the build gate reject untrusted certificates and preserve hostname checks', async () => {
       const required = fixture.client('require');
       assert.equal((await required`select ssl from pg_stat_ssl where pid=pg_backend_pid()`)[0].ssl, true);
-      const untrusted = fixture.client({ rejectUnauthorized: true });
+      const untrusted = fixture.client(databaseTls(fixture.url, { NODE_ENV: 'production' }));
       await assert.rejects(untrusted`select 1`, error => error instanceof Error && /self.signed|certificate/i.test(error.message));
-      assert.equal(Number((await admin`select 1 as trusted`)[0].trusted), 1, 'explicit fixture CA plus host SAN verifies successfully');
-      const wrongHost = fixture.client({ ca: fixture.certificate, rejectUnauthorized: true, servername: 'wrong.native-test.invalid' });
+      const trustedOptions = databaseTls(fixture.url, { NODE_ENV: 'production', DATABASE_CA_CERT: fixture.certificate })!;
+      const trusted = fixture.client(trustedOptions);
+      assert.equal((await trusted`select ssl from pg_stat_ssl where pid=pg_backend_pid()`)[0].ssl, true, 'runtime helper verifies the fixture CA and host SAN over an encrypted connection');
+      assert.equal(Number((await trusted`select 1 as trusted`)[0].trusted), 1);
+      const wrongHost = fixture.client({ ...trustedOptions, servername: 'wrong.native-test.invalid' });
       await assert.rejects(wrongHost`select 1`, error => error instanceof Error && /hostname|altnames|does not match/i.test(error.message), 'a trusted CA does not authorize a different server name');
-      completed.push('TLS certificate challenge');
+      assert.equal(await verifyDatabase({ DATABASE_URL: fixture.url, DATABASE_CA_CERT: fixture.certificate }), 'verified', 'actual read-only deployment gate accepts the trusted native certificate');
+      await assert.rejects(verifyDatabase({ DATABASE_URL: fixture.url }), error => error instanceof Error && error.message === 'Database TLS verification failed. Deployment stopped; check trusted certificate and connection settings.', 'actual gate rejects an untrusted certificate without exposing connection details');
+      completed.push('strict TLS helper and read-only build gate certificate challenge');
     });
     async function pair(label: string) {
       const owner = fixtureUser(`${label}-owner`), peer = fixtureUser(`${label}-peer`);
@@ -283,7 +290,7 @@ test('opt-in native PostgreSQL concurrency, TLS, memberships and immutable stagi
       assert.equal(Number((await admin`select requests from relay.request_limits where owner_id=${account.id} and bucket='write'`)[0].requests), 120);
       completed.push('atomic request quota boundary');
     });
-    const sourceHashes = Object.fromEntries(await Promise.all(['src/lib/server.ts', 'tests/native-database.test.ts', 'tests/helpers/native-postgres.ts'].map(async path => [path, createHash('sha256').update(await readFile(path)).digest('hex')])));
+    const sourceHashes = Object.fromEntries(await Promise.all(['src/lib/server.ts', 'src/lib/database-tls.ts', 'src/lib/supabase-ca.ts', 'scripts/verify-database.ts', 'tests/native-database.test.ts', 'tests/helpers/native-postgres.ts'].map(async path => [path, createHash('sha256').update(await readFile(path)).digest('hex')])));
     await fixture.close();
     await recordNativeEvidence('native-database', { scope: 'Fresh disposable native PostgreSQL, actual production SQL functions, five verified TLS driver connections; excludes browser, real provider, production network and managed platform.', version, schemaVersion: 6, distinctConnections: pids.length, cases: completed, passed: completed.length === 9, sourceHashes, durationMs: Date.now() - started, cleanup: 'cluster stopped and temporary directory removed successfully' });
   } finally { await fixture.close(); }

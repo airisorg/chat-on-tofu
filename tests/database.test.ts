@@ -153,7 +153,7 @@ test('atomic receipts make every non-send mutation safe after lost acknowledgeme
     const edit = await once({type:'edit',messageId,text:'Edited once'}); assert.equal(edit.retry.state.messages[0].text,'Edited once');
     const deleted = await once({type:'delete',messageId}); assert.equal(deleted.retry.state.messages[0].deleted,true);
     await assert.rejects(mutateChat(outsider,star.input,sql),(error:unknown)=>error instanceof ChatError && error.status===409);
-    await assert.rejects(mutateChat(alice,{...star.input,type:'profile',status:'Different intent'},sql),(error:unknown)=>error instanceof ChatError && error.status===409);
+    await assert.rejects(mutateChat(alice,{type:'profile',status:'Different intent',clientActionId:star.input.clientActionId,clientActionCreatedAt:star.input.clientActionCreatedAt},sql),(error:unknown)=>error instanceof ChatError && error.status===409);
     const privateReceipt = await getChatResult(outsider,created.input.clientActionId,sql); assert.equal(privateReceipt.actionId,undefined);
     const leave = await once({type:'leave',conversationId}); assert.deepEqual(leave.retry.state.conversations,[]);
     const revoked = await mutateChat(alice,created.input,sql); assert.deepEqual(revoked.state.conversations,[]); assert.deepEqual(revoked.state.messages,[]);

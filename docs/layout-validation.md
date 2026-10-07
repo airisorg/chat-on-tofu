@@ -28,3 +28,11 @@ The geometry suite uses Chrome and WebKit with local synthetic conversations. It
 Before the runtime fix, the 3440 px case reproduced the old 3168 px composer beside 896 px history. Expanding the matrix also exposed a 1024 × 400 px attachment draft whose Send button extended to y=435. These failing baselines distinguish a reproduced repair from an assertion that only passes new code. The existing spacing oracle was corrected to include the left scrollbar gutter in its content-center calculation; its one-pixel tolerance was retained.
 
 The suites establish the stated synthetic browser contracts. Unchanged visual baselines detect app drift, not Google pixel identity. Hosted UI checks and physical-device acceptance must be reported separately with their source revision; these tests do not certify all possible flows or devices.
+
+## Direct-message rendering coverage
+
+A later screenshot exposed a gap that the width tests could not detect: every message was a plain left-aligned row, including the current user's direct messages. The saved Google direct-message screenshot showed an outgoing bubble on the right without a visible own avatar/name. [Google's current display guidance](https://support.google.com/chat/answer/9951283?co=GENIE.Platform%3DDesktop&hl=en) distinguishes Comfortable mode (opposite-side sender and recipient bubbles) from Compact mode (same-side bubbles). The centered column and the message presentation are separate contracts.
+
+The main direct-message stream and its pop-up now opt into opposite-side bubbles. Own author text remains accessible, while spaces, search and thread rows retain their separate presentation. The incoming bubble's neutral color and radius are design-token adaptations; its exact computed Google values were not captured. Sparse-history vertical positioning and full density-setting parity remain open.
+
+Run `APP_URL=http://127.0.0.1:3001 npx playwright test --config playwright.dm-rendering.config.ts` for outgoing/incoming geometry, media containment, long text, actions, themes, and pop-up/thread isolation. Its independent horizontal separation assertion failed on the old implementation. The older centered-width test passed because it correctly tested one dimension and omitted this message-level behavior.

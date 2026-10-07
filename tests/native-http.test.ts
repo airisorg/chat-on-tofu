@@ -114,6 +114,18 @@ test('opt-in actual Next HTTP routes bridge HTTPS getUser and native PostgreSQL 
     });
     await t.test('actual HTTP origin, auth rejection, provider outage and write quota classification', async () => {
       const before = Number((await admin`select count(*)::int as count from relay.messages`)[0].count);
+      const eventsBefore = Number((await admin`select count(*)::int as count from relay.events`)[0].count);
+      for (const action of [
+        { type: 'edit', messageId, text: 'Rejected surplus target' },
+        { type: 'react', messageId, emoji: '👍' },
+        { type: 'star', messageId, starred: true },
+        { type: 'delete', messageId },
+        { type: 'profile', status: 'Rejected surplus target' },
+      ]) {
+        assert.equal((await request('/api/chat', { ...action, conversationId: crypto.randomUUID() })).status, 400, 'surplus targets must be rejected at the actual HTTP boundary');
+      }
+      assert.equal(Number((await admin`select count(*)::int as count from relay.events`)[0].count), eventsBefore, 'rejected input must not emit notifications');
+      assert.equal((await admin`select text from relay.messages where id=${messageId}`)[0].text, 'Actual route and native driver message');
       assert.equal((await fetch(origin + '/api/chat')).status, 401);
       assert.equal((await request('/api/chat', undefined, 'owner', { Authorization: 'Bearer synthetic-native-rejected-token' })).status, 401);
       assert.equal((await request('/api/chat', { type: 'profile', name: 'Must not change' }, 'owner', { Origin: 'https://foreign.invalid' })).status, 403);
@@ -129,7 +141,7 @@ test('opt-in actual Next HTTP routes bridge HTTPS getUser and native PostgreSQL 
       completed.push('HTTP cross-origin/auth outage/invalid token/quota status');
     });
     const sourceHashes = Object.fromEntries(await Promise.all(['src/lib/server.ts', 'src/app/api/chat/route.ts', 'src/app/api/uploads/route.ts', 'src/app/api/attachments/route.ts', 'tests/native-http.test.ts', 'tests/helpers/native-postgres.ts'].map(async path => [path, createHash('sha256').update(await readFile(path)).digest('hex')])));
-    evidence = { scope: 'Actual prebuilt Next production HTTP handlers -> actual Supabase SDK getUser over local CA-trusted HTTPS -> actual postgres.js SSL driver -> fresh native PostgreSQL. Identities, tokens and provider responses are synthetic; no real Google/Supabase/Tofu account, browser or hosting proof.', buildId, buildBinding, prebuiltSourceVerification: buildBinding ? 'Externally recorded fresh production build ID and all recorded runtime source hashes matched before launch.' : 'Prebuilt source alignment unverified; hashes describe working files, not their presence in the compiled bundle.', sourceHashes, cases: completed, passed: completed.length === 3, identityRequests, durationMs: Date.now() - started, productionDatabaseTls: 'unchanged ssl=require; encryption verified separately but server certificate verification remains a documented operational gap' };
+    evidence = { scope: 'Actual prebuilt Next production HTTP handlers -> actual Supabase SDK getUser over local CA-trusted HTTPS -> actual postgres.js SSL driver -> fresh native PostgreSQL. Identities, tokens and provider responses are synthetic; no real Google/Supabase/Tofu account, browser or hosting proof.', buildId, buildBinding, prebuiltSourceVerification: buildBinding ? 'Externally recorded fresh production build ID and all recorded runtime source hashes matched before launch.' : 'Prebuilt source alignment unverified; hashes describe working files, not their presence in the compiled bundle.', sourceHashes, cases: completed, passed: completed.length === 3, identityRequests, durationMs: Date.now() - started, productionDatabaseTls: 'Production databaseTls verifies the fixture peer and hostname using NODE_EXTRA_CA_CERTS. This is synthetic trusted-certificate proof; the hosted build gate must separately establish managed-provider connectivity.' };
   } finally {
     const failures: unknown[] = [];
     try { if (next) await stopChild(next.child); } catch (error) { failures.push(error); }

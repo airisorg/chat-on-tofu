@@ -14,7 +14,7 @@ export function contentSecurityPolicy(nonce: string, authUrl: string | undefined
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${development ? " 'unsafe-eval'" : ''}`,
     // React uses inline style properties for measured menus, avatars and viewports.
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https:",
+    "img-src 'self' data: blob: https://googleusercontent.com https://*.googleusercontent.com https://gstatic.com https://*.gstatic.com",
     "font-src 'self'",
     "media-src 'self' data: blob:",
     `connect-src ${connections.join(' ')}`,
