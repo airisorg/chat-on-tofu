@@ -140,3 +140,114 @@ test.describe('coarse desktop headings', () => {
     expect(bounds.width).toBeGreaterThanOrEqual(44); expect(bounds.height).toBeGreaterThanOrEqual(44);
   });
 });
+
+async function focusMetrics(control: Locator) {
+  await expect(control).toHaveCount(1);
+  return control.evaluate(node => {
+    const box = (element: Element) => {
+      const r = element.getBoundingClientRect();
+      return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom };
+    };
+    const css = getComputedStyle(node);
+    const width = parseFloat(css.outlineWidth);
+    const offset = parseFloat(css.outlineOffset);
+    const outside = Math.max(0, width + offset);
+    const row = box(node);
+    return {
+      row, icon: box(node.querySelector(':scope > svg,:scope > .avatar,:scope > .space-avatar')!), label: box(node.querySelector(':scope > span')!),
+      font: { family: css.fontFamily, size: css.fontSize, weight: css.fontWeight, line: css.lineHeight },
+      focus: node.matches(':focus-visible'), outline: { width, offset, style: css.outlineStyle, outside },
+      paint: { x: row.x - outside, y: row.y - outside, right: row.right + outside, bottom: row.bottom + outside },
+    };
+  });
+}
+
+async function keyboardFocusMentions(page: Page) {
+  // Move from the next shortcut with an actual keyboard event, rather than
+  // styling a fake focus class or relying on pointer-focus heuristics.
+  await sidebar(page).getByRole('button', { name: 'Starred', exact: true }).focus();
+  // WebKit's macOS default skips buttons on plain Tab; Option+Tab includes
+  // every focusable control. Both paths still require real keyboard traversal.
+  await page.keyboard.press(page.context().browser()?.browserType().name() === 'webkit' ? 'Alt+Shift+Tab' : 'Shift+Tab');
+  const mentions = sidebar(page).getByRole('button', { name: 'Mentions', exact: true });
+  await expect(mentions).toBeFocused();
+  await expect.poll(() => mentions.evaluate(node => node.matches(':focus-visible'))).toBe(true);
+  return mentions;
+}
+
+for (const theme of ['light', 'dark'] as const) for (const collapsed of [false, true]) {
+  test(`selected Mentions ${theme} ${collapsed ? 'collapsed' : 'expanded'} keeps focus paint inside its row`, async ({ page }, info) => {
+    await fixture(page, theme);
+    if (collapsed) await page.getByRole('button', { name: 'Main menu', exact: true }).click();
+    const mentions = sidebar(page).getByRole('button', { name: 'Mentions', exact: true });
+    await mentions.click();
+    await expect(mentions).toHaveClass(/selected/);
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Mentions', exact: true })).toBeVisible();
+    await mentions.evaluate(node => (node as HTMLElement).blur());
+    const nav = sidebar(page).locator('nav');
+    await expect(nav).toHaveCount(1);
+    const folder = evidenceDirectory(info, info.project.name); mkdirSync(folder, { recursive: true });
+    const prefix = `mentions-${theme}-${collapsed ? 'collapsed' : 'expanded'}`;
+    await nav.screenshot({ path: resolve(folder, `${prefix}-unfocused.png`) });
+    const unfocused = await focusMetrics(mentions);
+    expect(unfocused.focus).toBe(false);
+    const focusedControl = await keyboardFocusMentions(page);
+    const focused = await focusMetrics(focusedControl);
+    await nav.screenshot({ path: resolve(folder, `${prefix}-focused.png`) });
+    writeFileSync(resolve(folder, `${prefix}.json`), JSON.stringify({ unfocused, focused }, null, 2) + '\n');
+
+    expect(focused.row).toEqual(unfocused.row);
+    expect(focused.row.height).toBe(collapsed ? 44 : 28);
+    expect(focused.icon.width).toBe(22); expect(focused.icon.height).toBe(22);
+    expect(Math.abs(focused.icon.y + 11 - focused.row.y - focused.row.height / 2)).toBeLessThanOrEqual(0.5);
+    expect(focused.font).toMatchObject({ size: '14px', weight: '400', line: '16px' });
+    expect(focused.font.family).toContain('Google Sans');
+    if (!collapsed) {
+      expect(focused.label.height).toBe(16);
+      expect(Math.abs(focused.label.y + 8 - focused.row.y - focused.row.height / 2)).toBeLessThanOrEqual(0.5);
+      expect(focused.label.x - focused.icon.right).toBe(16);
+    }
+    const home = (await focusMetrics(sidebar(page).getByRole('button', { name: 'Home', exact: true }))).row;
+    const starred = (await focusMetrics(sidebar(page).getByRole('button', { name: 'Starred', exact: true }))).row;
+    expect(focused.row.y - home.bottom).toBe(0); expect(starred.y - focused.row.bottom).toBe(0);
+    expect(focused.outline.style).toBe('solid'); expect(focused.outline.width).toBe(2);
+    expect(focused.outline.outside, 'focus outline cannot paint into adjacent dense shortcut rows').toBe(0);
+    expect(focused.paint.y).toBeGreaterThanOrEqual(home.bottom);
+    expect(focused.paint.bottom).toBeLessThanOrEqual(starred.y);
+    await hit(focusedControl);
+
+    // These are app-regression snapshots. Selected dark/focused Google parity
+    // remains unmeasured; the28px row comes from historical light Google data.
+    await expect(nav).toHaveScreenshot(`${prefix}-focused.png`);
+    await focusedControl.evaluate(node => (node as HTMLElement).blur());
+    await expect(nav).toHaveScreenshot(`${prefix}-unfocused.png`);
+
+    // The same inset contract must cover conversation rows, including the
+    // first row in a group, where an exterior ring could touch its heading.
+    if (!collapsed) {
+      const conversation = sidebar(page).getByRole('button', { name: 'Maya Chen', exact: true });
+      await conversation.focus();
+      const peerFocus = await focusMetrics(conversation);
+      expect(peerFocus.focus).toBe(true); expect(peerFocus.outline.width).toBe(2);
+      expect(peerFocus.outline.outside).toBe(0); expect(peerFocus.row.height).toBe(28);
+      await hit(conversation);
+    }
+  });
+}
+
+test.describe('coarse sidebar focus', () => {
+  test.use({ viewport: { width: 1440, height: 960 }, hasTouch: true, isMobile: true });
+  test('shortcut and conversation focus retain44px touch rows', async ({ page }) => {
+    await fixture(page, 'dark');
+    const mentions = await keyboardFocusMentions(page);
+    const shortcut = await focusMetrics(mentions);
+    expect(shortcut.row.height).toBeGreaterThanOrEqual(44);
+    expect(shortcut.outline.outside).toBe(0);
+    const conversation = sidebar(page).getByRole('button', { name: 'Maya Chen', exact: true });
+    await conversation.focus();
+    const peer = await focusMetrics(conversation);
+    expect(peer.focus).toBe(true); expect(peer.row.height).toBeGreaterThanOrEqual(44);
+    expect(peer.outline.outside).toBe(0);
+    await hit(conversation);
+  });
+});
