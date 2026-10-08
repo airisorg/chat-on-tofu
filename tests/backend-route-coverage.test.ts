@@ -42,6 +42,7 @@ if (process.env[childFlag] !== '1') {
           '--import',
           'tsx',
           '--test',
+          '--test-reporter=tap',
           fileURLToPath(import.meta.url),
         ],
         {
