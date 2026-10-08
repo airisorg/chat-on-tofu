@@ -1,6 +1,6 @@
 # Contributing
 
-Use Node.js 22.13 or newer, run `npm ci`, and start `npm run dev`. The local **Explore demo** preview needs no provider account. Production preview is disabled.
+Use Node.js 22.13 or newer, run `npm ci`, and start `npm run dev`. The local **Explore demo** preview needs no provider account. Preview is disabled by default in production; `NEXT_PUBLIC_ENABLE_DEMO=true` explicitly enables it for testing.
 
 Run `npm run typecheck`, `npm run build`, and `npm run test:unit` for server/client changes. Browser tests require a separately running local server; install their engines with `npx playwright install chromium webkit`. All browser configurations default to `http://127.0.0.1:3000`; set `APP_URL` for another local port. Hosted URLs are rejected because these suites use synthetic accounts and fault fixtures. `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` optionally selects your Chromium binary.
 
@@ -16,7 +16,7 @@ workflow scans reachable Git history and the checked-out tree. GitHub-managed
 CodeQL default setup separately analyzes JavaScript/TypeScript in this repository;
 fork owners must enable code scanning for their own fork.
 Native PostgreSQL and compiled API integration also run in CI with disposable
-fixtures. The complete macOS screenshot gate retains its documented local run.
+fixtures. CI also runs combined Node/browser coverage with 95% line and statement floors, plus the reviewed landing and header/sidebar screenshot suites on macOS. The complete screenshot inventory retains its documented local run.
 CI never receives production credentials.
 
 ESLint uses current JavaScript/TypeScript recommended rules and React's two
@@ -30,6 +30,8 @@ Use the relevant `test:*` script for the behavior changed. `test:voice` captures
 Visual regression baselines under `tests/visual-regression.spec.ts-snapshots/` show synthetic local conversations. Review rendered component differences before updating a baseline. Baseline approval is separate from comparisons with Google's actual interface and from device acceptance.
 
 Keep changes focused, preserve account isolation and stable retry identities, and describe the checks run in your pull request. Do not include populated environment files, credentials, production messages, personal screenshots, or recordings. Bundled fonts, icons and emoji data retain their separate license notices. This project is independent of Google; new features must describe what this app actually supports.
+
+Submit work you have the right to share under the project license, and preserve notices for any third-party code or assets you add.
 
 For a suspected credential or private-data issue, use GitHub's private vulnerability reporting when available; do not post credentials or private account data in a public issue.
 

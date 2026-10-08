@@ -1879,26 +1879,8 @@ export default function ChatApp() {
               your team, and the way you move.
             </p>
             <button className="google-button" onClick={chat.signIn} disabled={!chat.authAvailable}>
-              <svg viewBox="0 0 48 48" width="20" height="20" aria-hidden="true">
-                <path
-                  fill="#4285F4"
-                  d="M43.6 24.5c0-1.4-.1-2.8-.4-4.2H24v8h11a9.4 9.4 0 0 1-4.1 6.2v5.2h6.6c3.9-3.6 6.1-8.9 6.1-15.2Z"
-                />
-                <path
-                  fill="#34A853"
-                  d="M24 44c5.5 0 10.1-1.8 13.5-4.9l-6.6-5.2a12.3 12.3 0 0 1-18.3-6.5H5.8v5.4A20 20 0 0 0 24 44Z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M12.6 27.4a12 12 0 0 1 0-7.7v-5.4H5.8a20 20 0 0 0 0 18.5l6.8-5.4Z"
-                />
-                <path
-                  fill="#EA4335"
-                  d="M24 12c3 0 5.5 1 7.6 3l5.7-5.7A19.2 19.2 0 0 0 24 4 20 20 0 0 0 5.8 14.3l6.8 5.4A12 12 0 0 1 24 12Z"
-                />
-              </svg>
-              Continue with Google
-              <ArrowUpRight size={18} />
+              <img src="/auth/google-g.svg" width={20} height={20} alt="" aria-hidden="true" />
+              <span>Continue with Google</span>
             </button>
             {!chat.authAvailable && (
               <p className="auth-note">

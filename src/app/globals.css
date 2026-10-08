@@ -2166,27 +2166,37 @@ button:hover {
   min-height: 48px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 13px;
+  justify-content: flex-start;
+  gap: 10px;
   border-radius: 100px;
-  background: var(--blue);
-  color: var(--surface);
-  border: 1px solid var(--line);
-  font-size: 16px;
+  background: #fff;
+  color: #1f1f1f;
+  border: 1px solid #747775;
+  font-family: var(--font-title);
+  font-size: 14px;
   font-weight: 500;
-  padding: 12px 20px;
+  line-height: 20px;
+  padding: 12px;
 }
 .google-button:not(:disabled):hover {
-  background: #074aaf;
+  background: #f8faff;
+}
+:root[data-theme='dark'] .google-button {
+  background: #131314;
+  color: #e3e3e3;
+  border-color: #8e918f;
 }
 :root[data-theme='dark'] .google-button:not(:disabled):hover {
-  background: #8ab4f8;
+  background: #202124;
 }
-.google-button > svg:last-child {
-  margin-left: auto;
+.google-button > span {
+  flex: 1;
+  text-align: center;
 }
-.google-button > svg:first-child {
-  margin-right: auto;
+.google-button > img {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
 }
 .google-button:disabled {
   opacity: 0.6;
@@ -3138,6 +3148,8 @@ button:hover {
   .demo-button {
     max-width: 100%;
     min-height: 56px;
+  }
+  .demo-button {
     font-size: 16px;
   }
   .welcome-copy > .auth-note {

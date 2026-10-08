@@ -80,11 +80,11 @@ Checks compare fixture cardinality, schema, normalized read content, selected me
 
 ## Stability and deployment boundaries
 
-Use `npm run test:unit`, `npm run typecheck` and `npm run build` for the default gates. The README documents opt-in native PostgreSQL/HTTP tests and their isolated fixture requirements. A build-bound native HTTP check exercises the actual route, identity SDK and database driver with synthetic accounts; it does not replace real hosted acceptance.
+Use `npm run test:unit`, `npm run typecheck` and `npm run build` for the default gates. The [testing guide](testing.md#native-acceptance-binding) documents opt-in native PostgreSQL/HTTP tests and their isolated fixture requirements. A build-bound native HTTP check exercises the actual route, identity SDK and database driver with synthetic accounts; it does not replace real hosted acceptance.
 
 An invitation committed after a request's negative existence probe may first appear on the next request. This is explicit and tested; there is no persistent negative cache. Separate queries already use PostgreSQL Read Committed snapshots.
 
-Managed database certificate verification remains an open provider-configuration requirement, as documented in the README. Do not infer certificate trust or a hosted performance guarantee from the verified local fixture.
+Remote database connections require certificate and hostname verification, as described in [runtime and data handling](runtime.md#browser-and-database-security). The configured hosted build checks a real verified database connection; an unconfigured local build skips that gate. The local benchmark fixture does not establish production connectivity or a hosted performance guarantee.
 
 ## Primary references
 

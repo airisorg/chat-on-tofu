@@ -1,86 +1,86 @@
-# Chat
+# Tofu Chat
 
-An independent team messenger with Google Chat-inspired desktop and iPhone layouts. The app has its own conversations; it does not import Google Chat messages.
+A lightweight team messenger for groups of up to 30 people, with direct messages, spaces, threads and file sharing.
 
-Open [Chat on Tofu](https://chat-84bee5accbbd.trytofu.app/) and sign in with Google. To chat with a friend, add their Google email using **New chat** or **Add people**, then share the conversation's invitation link. New email invitations stay pending until the recipient signs in with that same currently verified email. The server claims them during the recipient's authenticated requests; a cached contact address alone never grants access.
+## Deployed on Tofu
+
+[![Deployed on Tofu](docs/media/deployed-on-tofu.svg)](https://trytofu.ai/)
+[![Quality](https://github.com/airisorg/tofu-chat/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/airisorg/tofu-chat/actions/workflows/quality.yml)
+
+[Try the live app](https://chat-84bee5accbbd.trytofu.app/) — sign in with Google and start a conversation.
+
+Tofu Chat runs on [Tofu](https://trytofu.ai/), which brings hosting, a managed database and Google sign-in together for apps built with a coding agent. Have an app ready to share? [Take it online with Tofu](https://trytofu.ai/).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/team-chat-desktop-dark.png">
+  <img src="docs/media/team-chat-desktop.png" alt="Tofu Chat desktop workspace with team messages, spaces and reactions" width="1280">
+</picture>
+
+_Sample conversations from the local demo._
+
+## See it in action
+
+Try a message and a reaction in the landing page's interactive preview, or open the app on your phone.
+
+<p>
+  <img src="docs/media/landing-demo.gif" alt="Typing and sending a sample message, then adding a reaction in Tofu Chat's local preview" width="450">
+  <img src="docs/media/team-chat-mobile.png" alt="Tofu Chat mobile Home screen showing sample direct messages and spaces" width="260">
+</p>
+
+_These captures use synthetic local data. The interactive preview does not send messages to other accounts._
+
+## Start a conversation
+
+Choose **New chat**, add a friend's Google email, and share the conversation's invitation link. They join by signing in with that verified email. Use spaces for a team or topic, and threads to keep replies together.
+
+You can send images, files and voice messages; edit or delete your messages; add reactions; and find conversations through search, mentions and stars. Drafts stay on your device when enabled. Files can be up to 5 MiB each, with three attachments per message; voice recordings can be up to two minutes.
+
+On iPhone, open the app in Safari, tap **Share → Add to Home Screen**, and enable **Open as Web App** if offered. You can also use the app in an ordinary browser.
+
+Tofu Chat is an independent messenger. Google sign-in does not connect it to Google Chat or import existing conversations. Video and voice calls, background push notifications and automatic offline sending are not included.
+
+## Deploy your own with Tofu
+
+Fork the repository, follow [Tofu's agent setup](https://trytofu.ai/agent), and ask your coding agent:
+
+> Deploy this app on Tofu with a database and Google sign-in.
+
+Tofu connects the hosting and services; your agent builds and checks the app. This is a server app with a database, so it needs Tofu's Pro hosting. See [current plans](https://trytofu.ai/pricing) before deploying.
 
 ## Run locally
+
+Use Node.js 22.13 or newer:
 
 ```sh
 npm ci
 npm run dev
 ```
 
-Open http://localhost:3000. For local interface testing, choose **Explore demo** to try the interface without an account. This local preview is hidden in production. Preview conversations stay in this browser and are visibly labeled; they are separate from real account data.
+Open <http://localhost:3000> and choose **Explore demo** to try synthetic conversations without an account. The demo is enabled by default in development; its data stays in that browser. Production disables it unless explicitly enabled for testing.
 
-For the production workspace, Tofu supplies `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and the corresponding public Supabase variables. Never commit a populated environment file.
+A connected workspace needs PostgreSQL and Supabase identity settings. Tofu supplies these for the hosted app; [.env.example](.env.example) lists the settings for your own deployment. Self-hosted Google sign-in also needs an authorized Tofu OAuth broker setup; environment values alone do not configure it. Keep populated environment files and credentials out of Git. See [runtime and data handling](docs/runtime.md) for authorization, limits and retry behavior.
 
-## Production sign-in and data
+## Development
 
-Google sign-in uses Tofu's OAuth broker and the application's own Supabase identity service. The browser obtains its session through the supported redirect. Every chat API request verifies the bearer token with Supabase `getUser`; browser-provided account IDs do not authorize an operation. Only conversation members can access its messages, and only authors can edit or delete their own messages. A private PostgreSQL schema stores profiles, conversations, memberships, messages, reactions, starred state and per-user preferences. The server applies the idempotent schema on first authenticated use. Existing memberships belong to account IDs, not reassigned email addresses. Automatic invitation processing is bounded to ten candidates per transaction attempt and rotates across pending invitations; definite-rollback retries can repeat that bounded preparation. A capacity refusal leaves the invitation pending without blocking sign-in. A verified email already cached against a different account fails closed with a conflict; resolving a stale provider-account mapping requires operator verification rather than silently transferring memberships.
+Built with Next.js, React and TypeScript, with PostgreSQL for conversations and Supabase for identity.
 
-A conversation has at most 30 people including its creator and pending invitations. Membership changes reserve slots under a conversation lock, and bulk invitations avoid a query for every recipient. History reads use conversation/date/ID indexes for the current user's memberships; reactions are grouped once, and message metadata is stored separately from inline binary data. The final response counts actual serialized text, authors, reactions and workspace metadata within a 3 MiB budget, retaining older owned thread roots when their recent replies are selected. Trimming the loaded working set never deletes stored messages or reactions. Shared metadata changes check the complete affected workspaces before committing. Sidebar previews are limited to 200 characters; stored message text stays intact. Near the response limit, optional avatars and previews can be compacted while names, descriptions, membership and preferences remain truthful. A legacy workspace whose remaining metadata still exceeds the budget reports a loading error; leaving a conversation can still commit so it can recover. This is a bounded working set, not unlimited conversation capacity.
+```sh
+npm run format:check
+npm run lint
+npm run typecheck
+npm run test:unit
+npm run build
+```
 
-Ordinary nonempty history reads use five application SQL statements rather than eight, without caching identity or membership. Capacity checks add two SQL statements to ordinary shared writes: recipient locks followed by a fresh aggregate byte bound; near-limit workspaces use exact serialization. See [database performance](docs/database-performance.md) for the native before/after results, concurrent pool measurements, stability checks and measurement limits.
+The test suite includes unit tests, embedded SQL checks, native PostgreSQL and API integration, browser flows, failure injection and screenshot regressions. See [the testing guide](docs/testing.md) for coverage, CI, browser setup and source-bound integration checks. Screenshots detect changes in this app; they do not establish that it matches another product pixel for pixel.
 
-The public configuration endpoint exposes the Supabase URL and public anonymous key only. The database connection string never reaches the browser. The service worker caches public assets and a public offline page; it does not cache private conversations, API responses, sign-in callbacks or tokens. The browser's online indicator is a hint: an explicit send, file retry or sign-in attempt remains available. An actual offline event aborts active transmissions, preserves drafts and suppresses routine polling until reconnection or an explicit foreground attempt. The app does not queue writes for automatic delivery.
+- [Contributing](CONTRIBUTING.md)
+- [Database performance and benchmarks](docs/database-performance.md)
+- [Feature scope and gaps](docs/feature-gap-analysis.md)
+- [Security and private vulnerability reports](SECURITY.md)
 
-An actual API authentication rejection permits one token refresh and one retry of the identical request within its original deadline. Provider outages preserve the session; a revoked refresh session requires sign-in. Account generation guards reject late responses or refreshes from a previous account. Visible chat polling resumes every three seconds, with private realtime events as an earlier invalidation signal and a foreground refetch to recover missed events. The first read each minute retires at most 500 of that account's event rows older than a day. This bounds cleanup work; inactive accounts and fanout that outpaces cleanup still need an operational retention policy.
+## License
 
-Non-message changes carry a stable operation ID and timestamp. Private database receipts bind that ID to its verified owner and payload in the same transaction as the change and its events. After an ambiguous response, a receipt GET confirms the saved result without replaying a toggle or creating another conversation. If confirmation also fails, an explicit retry keeps the same ID across reload. Stars and reactions include their desired state so a subsequent opposite action is distinct. Receipts cover seven days and at most 10,000 live changes per account; capacity rejects new changes instead of evicting unexpired receipts. The browser separately retains up to 64 unresolved or not-yet-consumed message receipts and 64 other operation IDs as hashes, UUIDs, confirmation flags and timestamps. Capacity never silently discards an earlier pending intent; an expired non-message retry is rejected with a warning to review current state before making a new change. These bounded protections do not establish unlimited exactly-once delivery, and browser storage restrictions fall back to memory-only retry protection.
+The project is available under the [MIT license](LICENSE). Bundled fonts, icons and emoji data retain their own licenses, listed in [third-party notices](THIRD_PARTY_NOTICES.md).
 
-Closing the page around a send response preserves its message ID until the matching draft has been cleared from durable storage. On reopening, a restored unchanged draft is reconciled only through its exact logical fingerprint and a confirmed receipt or its own authoritative message ID in the same conversation/thread. An unresolved attempt keeps explicit retry guidance and reuses its ID without automatic delivery. Newer different drafts remain intact; after a normal completed send, identical text can be sent again with a new ID. While an identical logical payload still has an outstanding receipt, it represents that attempt across reload, even if the text was edited away and back before the response; no durable human-intent revision is inferred. Old drafts whose earlier app version already discarded their ID cannot be safely reconciled by matching text alone. A quota fallback marks omitted attachments and retains the full-media receipt for an exact file retry; it never silently treats a partial draft as a cleared send. Nonempty restored drafts conservatively retain receipts, which remain subject to the 64-entry limit. Historical media-only backups without this marker cannot identify their missing files.
-
-Images and picked files can be up to 5 MiB (5,242,880 bytes), with three attachments per message. Authenticated uploads use `/api/uploads` to send 1 MiB binary chunks in JSON requests capped at 2 MiB, below the hosting platform's request limit. Private staging rows belong to the verified account and conversation, expire after 15 minutes, and reserve at most six files or 20 MiB of binary data per account (less than 27 MiB encoded). Each chunk is immutable; the final send validates and consumes the complete files in the message transaction. The stable message ID deduplicates retries after lost acknowledgements. Uploads and their final send share a 60-second deadline. The voice recorder supports up to two minutes within the same 5 MiB allowance. Main drafts use browser storage and may retain text only when storage cannot hold the attachments. Send acknowledgements clear only their captured unchanged draft; switching conversations or editing during transmission preserves the newer draft. Desktop pop-ups keep separate drafts in session memory, and expanding transfers them into the main draft storage.
-
-Chat polling returns file metadata and protected references, not inline base64. Visible files download as streamed binary responses through `/api/attachments` using the bearer session; the server verifies current membership and rejects deleted files. A memory cache reuses object URLs across polls, allows two concurrent downloads, and holds up to 64 MiB or 128 files before evicting older entries. Failed or evicted files reload only through an explicit retry, preventing repeated downloads when visible files exceed the memory budget. Leaving a conversation, changing accounts or signing out clears inaccessible cached media; private binaries are never persisted by this cache. History returns at most 2,000 messages within a bounded 3 MiB serialized state budget, including reactions and conversation metadata; selected thread replies retain their parent context. Existing database attachments remain compatible without moving them to another storage service.
-
-## iPhone Home Screen
-
-Open the deployed link in Safari, tap **Share**, choose **Add to Home Screen**, enable **Open as Web App** if offered, and tap **Add**. The app uses a standalone manifest, original PNG icons, safe-area padding and a composer sized for the visible viewport. The app remains available as an ordinary website.
-
-## Product and verification
-
-The interface includes direct/group conversations, spaces, message threads, reactions, image/file uploads, voice messages, message editing/deletion, stars, search, unread filters, conversation preferences, member invitations, drafts and account settings. Google Meet opens in its own service where offered. The app does not replace Google Workspace services such as Calendar or Drive.
-
-Licensed Google Sans and Roboto fonts are served by the app itself. Search supports people, conversations, dates, file types, links and mentions over the loaded history; relevance uses a local text rank. Known recipients are suggested from your own conversations. Desktop menus are anchored to their controls, while phone dialogs and composers follow the software keyboard's visible viewport.
-
-Run `npm run typecheck` and `npm run build`. With the local app running, use `npm run test:backend`, `npm run test:ux`, `npm run test:platform` and `npm run test:reliability`. Set `APP_URL` if the dev server uses a port other than 3000. The platform suite covers Chromium and WebKit with portrait/landscape phones, tablets, desktop resizing, install guidance, short visual viewports and contrast. The reliability suite uses an isolated fake session and routed API fixtures to test failure recovery without real credentials.
-
-For authenticated local browsing, use `http://localhost:<port>`. Next.js normalizes loopback IP request URLs to `localhost`, so the strict Origin check rejects browser writes from a `127.0.0.1` URL. The hosted HTTPS domain is unaffected; fixture-only routed browser tests do not establish this live-route behavior.
-
-Use `npx playwright test --config playwright.reference.config.ts` for bundled font rendering and availability/help menus, `npx playwright test --config playwright.search.config.ts` for structured search, and `npx tsx --test tests/search.test.ts` for search semantics. Search checks also verify avatar geometry and that phone actions cannot cover results.
-
-Use `npx tsx --test tests/network.test.ts tests/stress.test.ts` for authenticated retry/account isolation, persisted operation identities, capacity/expiry boundaries, concurrent message deduplication and bounded-history checks. These are isolated local SQL/client tests, not hosted load or real-provider acceptance. Network design follows [MDN's online-status guidance](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/onLine) and [AWS's idempotent retry guidance](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/).
-
-For real PostgreSQL locks and production HTTP routes, freeze the source, make a fresh production build and record its source/build binding as described in [the native acceptance guide](docs/testing.md#native-acceptance-binding). Then run `CHAT_NATIVE_WORK_DIR="$PWD/test-results/native" CHAT_NATIVE_BUILD_BINDING="$PWD/test-results/native-build-binding.json" npm run test:native`. The entrypoint rejects missing, malformed or stale bindings before starting fixtures. These opt-in tests require PostgreSQL 15+ binaries and OpenSSL 3; set `CHAT_NATIVE_PG_BIN` and `CHAT_NATIVE_OPENSSL` for their installed paths (defaults: `/opt/homebrew/bin` and `/opt/homebrew/bin/openssl`). They create private disposable loopback clusters and a synthetic identity service, then stop them and remove their fixture directories. The default Node run does not select the native suites. No production database or real Google account is used. Native tests verify competing transaction locks, deduplication, invitation capacity, membership revocation, upload reservations, quotas and actual HTTP authorization; synthetic certificates and identities cannot establish hosted provider trust or real sign-in acceptance. A direct unbound diagnostic invocation remains possible, but must not be reported as compiled-candidate acceptance.
-
-Use `npx tsx tests/benchmark-groups.ts final` and `npx tsx tests/benchmark-dense.ts final` for disposable 10- and 30-person action/query measurements. Output defaults to ignored `test-results/group-performance`; set `CHAT_EVIDENCE_DIR` to choose another directory. These timings include the server's internal serialized-state byte-budget calculation, but exclude final HTTP response serialization, authentication and quota routes, internet transfer, hosted database I/O and multi-connection contention. Browser and SQL fixture results remain separate from real two-device checks.
-
-Install test browsers with `npx playwright install chromium webkit` if needed. On macOS the Chromium suites use the installed Google Chrome; set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to select a different Chromium installation. The suites require a local server and cannot accidentally crawl the hosted app.
-
-Use `npm run test:geometry` for measured history/composer alignment, unread-count insets and short-window draft controls in Chrome and WebKit. See [layout validation](docs/layout-validation.md) for the Google reference measurements, failing baselines and the distinction between screenshot drift checks and reference parity.
-
-Use `npm run test:profile` for profile editing, pending requests, retries, account changes, keyboard containment and responsive layout. Use `npm run test:header-sidebar` for shared sidebar typography, consistent full-header insets, compact preview avatars and disclosure controls. These local fixtures test app contracts; selected Google typography tokens do not establish exact account-card or Space-header parity.
-
-Desktop and mobile viewport screenshots are generated during verification. Physical iPhone installation, hardware keyboard behavior and standalone Google account switching require device acceptance; desktop emulation cannot establish those results.
-
-Reference design sources: [Google Chat interface](https://support.google.com/chat/answer/7652236?co=GENIE.Platform%3DDesktop&hl=en), [Google Chat iPhone navigation](https://support.google.com/chat/answer/14170781?co=GENIE.Platform%3DiOS&hl=en), [official desktop screenshot](https://workspace.google.com/blog/product-announcements/welcome-new-google-chat), [current Google Chat product page](https://workspace.google.com/products/chat/), [Apple Home Screen instructions](https://support.apple.com/en-lamr/guide/iphone/iphea86e5236/ios).
-
-## Security and contribution
-
-Source is maintained at [airisorg/chat-on-tofu](https://github.com/airisorg/chat-on-tofu) under the MIT license. See [CONTRIBUTING.md](CONTRIBUTING.md) for local checks and fixture handling. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled font/icon/data provenance and dependency license boundaries.
-
-Production documents use a fresh Content Security Policy nonce for each request. Scripts need that nonce; framing and content sniffing are blocked. Google sign-in callbacks must match a ten-minute sign-in request saved in the same tab. Delayed file reads cannot attach to a different account or conversation. Verified-account API quotas span server instances: 600 reads and 120 writes, upload chunks or file downloads per minute in separate buckets. These controls reduce specific risks; they do not establish an attack-free application. Persistent browser sessions use the Supabase SDK's local storage, and hosting/provider abuse controls remain a separate responsibility.
-
-Database connections verify the server certificate and hostname in production and for all remote development hosts. Standard Supabase database hosts use Node's trusted roots plus the official public Supabase CA bundled with its source and fingerprint. Other providers use Node's trust store; an optional `DATABASE_CA_CERT` PEM bundle can add an independently trusted CA. There is no fallback to unverified TLS. Before a configured build, `scripts/verify-database.ts` opens one verified connection, runs a read-only `SELECT 1`, and closes it; failure stops the release. An unconfigured local build skips this gate, while a known hosted build must have `DATABASE_URL`. Native tests challenge untrusted and wrong-host certificates; only the hosted build gate establishes connectivity from that deployment environment.
-
-Action payloads reject unsupported top-level fields, and notification recipients come only from the resource authorized by the selected action. Settings includes **Save drafts on this device**: turning it off removes saved main-composer drafts while preserving the active draft for this visit. Reloading then discards unsent draft content. Retry identity records remain separate so ambiguous sends can still be confirmed safely. The preference does not change the Supabase session-storage model described above.
-
-The security browser suite requires a production build and a configured public identity provider. For a local unauthenticated gate, synthetic public configuration is sufficient: `SUPABASE_URL=https://security-provider.test.invalid SUPABASE_ANON_KEY=sb_publishable_security_fixture DATABASE_URL=postgres://localhost/security-fixture npm run start -- -p 3003`, then `APP_URL=http://127.0.0.1:3003 npm run test:security`. No provider or database connection is attempted by that gate. Real Google redirects and two-account synchronization require separate hosted acceptance.
-
-Screenshot baselines in this repository were reviewed on macOS for Chrome and WebKit. They detect drift in our interface; they do not prove pixel identity with Google's interface. Other operating systems need separately reviewed baselines because font and native emoji rendering differ. Set `CHAT_EVIDENCE_DIR` to export selected captures and benchmark data; otherwise generated evidence stays under ignored `test-results/`.
-
-See [the Home controls and motion audit](docs/home-controls-parity.md) for reference-based navigation decisions and known parity limits.
-
-See [the complete browser inventory and screenshot review process](docs/testing.md) for the two-server aggregate command, non-vacuous geometry checks, source binding and evidence boundaries.
+Tofu Chat is not affiliated with or endorsed by Google. Google names and the Google sign-in mark identify their respective services; the app icon and project identity are separate.

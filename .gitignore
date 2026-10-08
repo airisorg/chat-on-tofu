@@ -7,3 +7,7 @@ playwright-report/
 test-results/
 *.tsbuildinfo
 next-env.d.ts
+
+# Local browser captures; publish only selected synthetic media in docs/media.
+.playwright-cli/
+output/playwright/
