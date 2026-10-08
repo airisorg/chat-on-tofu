@@ -2,6 +2,44 @@
 
 A passing test proves its assertions in its recorded environment. It does not certify every screen, Google Chat parity, real provider authentication, physical-device behavior or an attack-free service.
 
+## Choose checks for a change
+
+Install browser engines with `npx playwright install chromium webkit`. On macOS,
+Chromium suites use the installed Google Chrome unless
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` selects another binary. `APP_URL` selects a
+local server port. These fixture suites reject hosted URLs.
+
+| Area                                           | Command                                                                                           |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Core browser flows                             | `npm run test:ux`                                                                                 |
+| Responsive layout, WebKit and install guidance | `npm run test:platform`                                                                           |
+| Failed requests and recovery                   | `npm run test:reliability`, `npm run test:network`, `npm run test:offline`                        |
+| History/composer alignment and unread insets   | `npm run test:geometry`, `npm run test:spacing`                                                   |
+| Profile and sidebar states                     | `npm run test:profile`, `npm run test:header-sidebar`                                             |
+| Screenshot regressions                         | `npm run test:visual`, `npm run test:dialog-visual`, `npm run test:home-toolbar`                  |
+| Fonts and reference controls                   | `npx playwright test --config playwright.reference.config.ts`                                     |
+| Search                                         | `npx playwright test --config playwright.search.config.ts`, `npx tsx --test tests/search.test.ts` |
+| Production CSP and unauthenticated routes      | `npm run test:security` against the separate production fixture                                   |
+
+Use `npm run test:browser:list` for the authoritative config/spec inventory.
+A listed suite is not an executed check. For authenticated local browsing use
+`http://localhost:<port>`: Next.js normalizes loopback IP request URLs to
+`localhost`, so the strict Origin check rejects live browser writes from a
+`127.0.0.1` page. Routed fixtures do not prove that live-route behavior.
+
+Use `npx tsx tests/benchmark-groups.ts final` and
+`npx tsx tests/benchmark-dense.ts final` for disposable 10- and 30-person
+measurements. Results default to ignored `test-results/group-performance`;
+`CHAT_EVIDENCE_DIR` selects another output directory. These embedded SQL timings
+include internal state-byte calculations but exclude final HTTP serialization,
+authentication and quota routes, internet transfer, hosted database I/O and
+multi-connection contention. See [database performance](database-performance.md)
+for native measurements and their separate limits.
+
+Physical iPhone installation, hardware keyboards, standalone account switching
+and two-account delivery require separate hosted/device acceptance. Emulated
+browsers and synthetic identity services cannot establish those results.
+
 ## Run the complete browser inventory
 
 Keep a development server running for demo and routed identity fixtures:
@@ -49,7 +87,7 @@ Run `npm run typecheck` and the Node layers separately. A successful build witho
 
 The layer classification reads actual static imports. The fast layer includes mocked API tests and is not a claim that every file is a pure function test. PGlite cannot establish native PostgreSQL lock scheduling; its concurrent promises and the native multi-connection tests are distinct evidence.
 
-Native tests are not selected by the ordinary Node command. `test:native` requires `CHAT_NATIVE_WORK_DIR`, PostgreSQL and OpenSSL; see the README for exact opt-in setup. The `test:native` acceptance entrypoint requires a readable `CHAT_NATIVE_BUILD_BINDING` from a fresh production build, matching `.next/BUILD_ID` and every recorded runtime source hash before any native fixture starts. `src/lib/server.ts` must be included. `CHAT_NATIVE_EXPECTED_BUILD_ID` can additionally assert the externally expected ID. Direct diagnostic invocation (`npx tsx --test tests/native-http.test.ts`) can run without that binding, but its evidence explicitly describes source alignment as unverified and must not be labeled candidate acceptance. Synthetic identity/TLS fixtures do not prove Google sign-in or managed-provider compatibility.
+Native tests are not selected by the ordinary Node command. `test:native` requires `CHAT_NATIVE_WORK_DIR`, PostgreSQL 15 or newer and OpenSSL 3. Set `CHAT_NATIVE_PG_BIN` and `CHAT_NATIVE_OPENSSL` to their installed paths; the defaults are `/opt/homebrew/bin` and `/opt/homebrew/bin/openssl`. See [native acceptance binding](#native-acceptance-binding) for exact opt-in setup. The `test:native` acceptance entrypoint requires a readable `CHAT_NATIVE_BUILD_BINDING` from a fresh production build, matching `.next/BUILD_ID` and every recorded runtime source hash before any native fixture starts. `src/lib/server.ts` must be included. `CHAT_NATIVE_EXPECTED_BUILD_ID` can additionally assert the externally expected ID. Direct diagnostic invocation (`npx tsx --test tests/native-http.test.ts`) can run without that binding, but its evidence explicitly describes source alignment as unverified and must not be labeled candidate acceptance. Synthetic identity/TLS fixtures do not prove Google sign-in or managed-provider compatibility.
 
 Coverage uses pinned c8 and `.c8rc.json`. Its `all` option includes unloaded files at zero: every TypeScript/TSX source, public JavaScript and the read-only database build gate remains in the denominator. Reports are in ignored `test-results/coverage/` (`index.html`, `coverage-final.json`, `coverage-summary.json`). `check-coverage.ts` fails if a source is omitted and applies evidence-based floors only to the heavily tested server, action-identity and login-callback modules. It does not impose an unsupported global percentage on UI code.
 
@@ -76,13 +114,15 @@ For an intentionally unbound diagnostic, invoke the selected native test directl
 
 Pull requests and pushes to `main` run the committed quality/security workflows. The repository also has GitHub-managed CodeQL default setup enabled:
 
-| Job                          | What it verifies                                                                                                                                                                              |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Quality / checks             | Locked install, formatting, lint, TypeScript, all non-native Node/SQL tests with all-source coverage floors, dependency advisories and production build                                       |
-| Quality / native-integration | Fresh compiled API against disposable PostgreSQL 16 and synthetic HTTPS identities, verified TLS, concurrent writes, invitation ownership, quotas, private upload/download and retry receipts |
-| Quality / browser            | Chromium and WebKit functional security, recovery and offline-shell flows against an isolated production server                                                                               |
-| Security / secrets           | Reachable Git history and checked-out source with checksum-pinned Gitleaks                                                                                                                    |
-| CodeQL default setup         | Existing GitHub-managed JavaScript/TypeScript analysis on changes and its weekly schedule                                                                                                     |
+| Job                                 | What it verifies                                                                                                                                                                              |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Quality / checks                    | Locked install, formatting, lint, TypeScript, all non-native Node/SQL tests with all-source coverage floors, dependency advisories and production build                                       |
+| Quality / native-integration        | Fresh compiled API against disposable PostgreSQL 16 and synthetic HTTPS identities, verified TLS, concurrent writes, invitation ownership, quotas, private upload/download and retry receipts |
+| Quality / browser                   | Chromium and WebKit functional security, recovery and offline-shell flows against an isolated production server                                                                               |
+| Quality / combined-runtime-coverage | Merged instrumented Node/browser execution with all runtime sources included and 95% line/statement floors                                                                                    |
+| Quality / landing-screenshot        | Reviewed landing and header/sidebar Chrome/WebKit baselines on macOS without automatic baseline updates                                                                                       |
+| Security / secrets                  | Reachable Git history and checked-out source with checksum-pinned Gitleaks                                                                                                                    |
+| CodeQL default setup                | Existing GitHub-managed JavaScript/TypeScript analysis on changes and its weekly schedule                                                                                                     |
 
 CodeQL uses the repository's existing default setup. Do not add an advanced CodeQL workflow alongside it: default setup blocks those analysis uploads. Fork owners must enable CodeQL for their own repository.
 
@@ -151,4 +191,4 @@ At known destructive test actions, `captureBeforeNavigation(page)` writes the ac
 
 Reports live under ignored `test-results/combined-coverage/`. `coverage-summary.json` lists every source, zero-hit files, nonexecutable inputs and per-layer totals; `execution.json` records the selected run/environment and immutable input hashes. An interrupted/failing diagnostic can produce a partial counter map, but cannot pass the acceptance gate. The build, server and browser fixtures are local; none of this proof implies a managed database or real Google identity was exercised.
 
-The `landing-screenshot` CI job runs the ordinary uninstrumented landing build on macOS15, both Chromium and WebKit, with an explicit installed Playwright Chromium path/version and the reviewed darwin goldens and all20 cases. It never updates or ignores screenshots. Platform/rendering differences can fail this job and require review; a newly configured job is not proof that a remote run passed. The complete remaining pixel matrix stays an explicit local macOS gate.
+The `landing-screenshot` and `header-sidebar-screenshot` CI jobs run ordinary uninstrumented builds on macOS 15, both Chromium and WebKit, with an explicit installed Playwright Chromium path/version and the reviewed darwin goldens: 20 landing cases and 44 header/sidebar cases. They never update or ignore screenshots. Platform/rendering differences can fail these jobs and require review; a configured job is not proof that a remote run passed. The complete remaining pixel matrix stays an explicit local macOS gate.

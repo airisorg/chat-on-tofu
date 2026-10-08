@@ -1,6 +1,6 @@
 # Security
 
-Report a suspected vulnerability using [GitHub private vulnerability reporting](https://github.com/airisorg/chat-on-tofu/security/advisories/new).
+Report a suspected vulnerability using [GitHub private vulnerability reporting](https://github.com/airisorg/tofu-chat/security/advisories/new).
 Do not post session tokens, database URLs, real private conversations or provider
 secrets in public issues. If private reporting is unavailable, contact a
 maintainer privately before sharing exploit details.
